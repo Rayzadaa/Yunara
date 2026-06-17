@@ -19,7 +19,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.4.2"
+VERSION = "2.4.3"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -428,6 +428,11 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log):
             log(f"ORDER PLACED #{order_no} SGD {amount}")
             notifier.send_event("🎉 Order Placed!", description=name, color=0x2ECC71, url=url,
                                 fields={"Order": order_no or "—", "Amount": f"SGD {amount or '?'}"}, ping=True)
+            # Always push the order/QR page so an AFK user still gets the PayNow QR.
+            try:
+                notifier.send_file(result_png, f"🧾 {name}: order #{order_no or '?'} — if PayNow, pay the QR within ~30 min")
+            except Exception:
+                pass
             _record_order(name, order_no, amount)
             return "ok"
 

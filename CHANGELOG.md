@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.4.3 — push the QR on success too
+- On a successful order, the bot now also sends the **full-page order/QR
+  screenshot** to Discord (not just a text confirmation), so an AFK user still
+  gets the PayNow QR to pay within the ~30-minute window.
+
 ## v2.4.2 — purchase-limit detection
 - Recognises Lazada's **"reached the limit for this product (OC03)"** — the account
   is already at the per-item max. The task now stops cleanly with a clear

@@ -1,6 +1,6 @@
 {
-  "version": "2.4.2",
+  "version": "2.4.3",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "4b01287223c4d69311b377cf249aeff891da5a2fb1f0eb29e814520b49c7090f",
-  "notes": "Detect Lazada's 'purchase limit reached (OC03)' and stop the task cleanly instead of retrying."
+  "sha256": "77b1d147f7252247e8860dd05f078eb4ed43d60eb9535c3f18543e08e27f326a",
+  "notes": "Send the full-page order/QR screenshot to Discord on successful orders too, so AFK users get the PayNow QR."
 }
