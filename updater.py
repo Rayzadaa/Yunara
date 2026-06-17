@@ -10,6 +10,7 @@ Manifest format (version.json):
 
 Set the manifest URL below (or override via UPDATE_URL in config.py).
 """
+import hashlib
 import json
 import os
 import tempfile
@@ -74,7 +75,20 @@ def apply(info, log):
         log("downloading update…")
         req = urllib.request.Request(url, headers={"User-Agent": "LazadaBot"})
         with urllib.request.urlopen(req, timeout=60) as r, open(zpath, "wb") as f:
-            f.write(r.read())
+            data = r.read()
+            f.write(data)
+
+        # Integrity check: if the manifest provides a sha256, the download must match.
+        expected = (info.get("sha256") or "").strip().lower()
+        if expected:
+            actual = hashlib.sha256(data).hexdigest()
+            if actual != expected:
+                log(f"SHA-256 MISMATCH — refusing update (expected {expected[:12]}…, got {actual[:12]}…)")
+                return False
+            log("SHA-256 verified ✓")
+        else:
+            log("warning: no sha256 in manifest — skipping integrity check")
+
         updated = 0
         with zipfile.ZipFile(zpath) as z:
             for member in z.namelist():
@@ -89,3 +103,12 @@ def apply(info, log):
     except Exception as e:
         log(f"update failed: {e}")
         return False
+
+
+def sha256_of(path):
+    """Compute a file's SHA-256 — use this to fill the manifest when releasing."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()

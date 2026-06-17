@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Byte-compile all modules (syntax check)
+        run: python -m compileall -q engine.py gui_app.py notifier.py captcha_solver.py updater.py
+      - name: Validate version.json
+        run: python -c "import json; json.load(open('version.json')); print('version.json OK')"

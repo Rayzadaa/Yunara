@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.3 — scaling + hardening
+- **Multi-account** — define accounts (label = phone) and assign one per task;
+  each account keeps its own login session.
+- **Per-profile sessions / proxy fix** — sessions are keyed by account + proxy, so
+  a proxied task logs in through its own IP instead of showing logged-out.
+- **Fast monitor (opt-in)** — a lightweight HTML pre-check skips full page loads on
+  obvious out-of-stock cycles. Conservative (only short-circuits when certain).
+- **Update integrity** — the updater verifies a **SHA-256** from the manifest before
+  applying, so a tampered download is rejected.
+- **Slider CAPTCHA attempt** — tries a human-like drag before falling back to manual.
+- **Per-task error backoff** — exponential backoff on repeated errors/CAPTCHAs to
+  avoid hammering an IP into a ban.
+- **Crash alerts** — worker errors are pushed to Discord, not just the local log.
+- **Dry-run mode** — per task: go all the way to Place Order and stop (validate the
+  full flow without buying).
+- **CI** — GitHub Action byte-compiles every module on push.
+- **UI** — dark theme, colour-coded status, sortable table, Account column,
+  Duplicate-task button.
+
 ## v2.2 — payment + auto-update
 - **Payment method per task** — choose Lazada Wallet, Credit/Debit Card, Cash on
   Delivery, PayLater, etc. (or leave blank to use whatever's pre-selected).

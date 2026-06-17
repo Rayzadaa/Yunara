@@ -1,11 +1,13 @@
-"""Core monitoring/checkout engine for the Lazada GUI bot (v2.1).
+"""Core monitoring/checkout engine for the Lazada GUI bot (v2.3).
 
-GUI-agnostic: the UI interacts through plain callbacks. Each task runs in its
-own thread with its own Playwright browser context (+ optional proxy), so tasks
-run truly in parallel and spread requests across IPs.
+Each task runs in its own thread with its own Playwright browser context
+(+ optional proxy). Sessions are keyed per (account, proxy) so multi-account
+and proxied checkout both work.
 """
+import hashlib
 import os
 import random
+import re
 import threading
 import time
 
@@ -17,11 +19,11 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.2"
-SESSION_FILE = os.path.join(os.path.dirname(__file__), "lazada_session.json")
+VERSION = "2.3"
+HERE = os.path.dirname(__file__)
+SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
 
-# ─── Centralized selectors (#14) — one place to update if Lazada changes ──
 SEL = {
     "login_link": "a[data-spm-click*='locaid=login']",
     "account_trigger": "#myAccountTrigger",
@@ -35,20 +37,20 @@ SEL = {
     "qty_plus": "i.next-icon-add",
     "captcha": [".nc-container", "#nc_1_wrapper", ".nc_iconfont", "#nocaptcha",
                 ".J_MIDDLEWARE_FRAME_WIDGET", "iframe[src*='captcha']", "iframe[name*='captcha']"],
+    "slider_handle": [".nc_iconfont.btn_slide", ".btn_slide", ".nc-lang-cnt .btn_slide"],
+    "slider_track": [".nc_scale", ".scale_text"],
     "place_order_text": "Place Order",
     "thank_you": ".thank-you-heading",
     "thank_you_amount": ".thank-you-amount",
     "thank_you_order": ".thank-you-order-number",
 }
 
-# Anti-automation init script (#8 stealth).
 _STEALTH_JS = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 Object.defineProperty(navigator, 'languages', {get: () => ['en-SG','en']});
 Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
 window.chrome = window.chrome || {runtime: {}};
 """
-
 _BLOCK_TYPES = {"image", "media", "font"}
 
 
@@ -59,7 +61,19 @@ def notify(text):
         pass
 
 
-# ─── Proxy parsing + health check (#7) ────────────────────────────
+# ─── Per-profile session files (multi-account + proxy-IP fix) ──────
+
+def session_path(account="", proxy_raw=""):
+    """Default profile -> the original session file (back-compat). Otherwise a
+    file keyed by account label + proxy so each account/IP keeps its own login."""
+    key = f"{account}|{proxy_raw}".strip("|")
+    if not key:
+        return SESSION_FILE
+    h = hashlib.md5(key.encode()).hexdigest()[:10]
+    return os.path.join(HERE, f"lazada_session_{h}.json")
+
+
+# ─── Proxy ────────────────────────────────────────────────────────
 
 def parse_proxy(raw):
     if not raw:
@@ -79,7 +93,6 @@ def parse_proxy(raw):
 
 
 def test_proxy(raw, timeout_ms=15000):
-    """Return (ok, message) after trying to load a page through the proxy."""
     proxy = parse_proxy(raw)
     if not proxy:
         return (False, "unparseable")
@@ -101,7 +114,7 @@ def human_pause(min_s=0.3, max_s=0.7):
     time.sleep(random.uniform(min_s, max_s))
 
 
-# ─── CAPTCHA / login / stock / variant helpers ────────────────────
+# ─── CAPTCHA (incl. slider auto-attempt) ──────────────────────────
 
 def check_for_captcha(page):
     try:
@@ -117,8 +130,36 @@ def check_for_captcha(page):
     return False
 
 
+def _try_slider(page, log):
+    """Best-effort drag of the Lazada slider handle. Often blocked by trajectory
+    checks, but worth a shot before falling back to manual."""
+    for sel in SEL["slider_handle"]:
+        handle = page.query_selector(sel)
+        if handle and handle.is_visible():
+            try:
+                box = handle.bounding_box()
+                if not box:
+                    continue
+                page.mouse.move(box["x"] + 5, box["y"] + box["height"] / 2)
+                page.mouse.down()
+                steps = random.randint(20, 30)
+                for i in range(steps):
+                    page.mouse.move(box["x"] + 5 + (i + 1) * 12 + random.uniform(-2, 2),
+                                    box["y"] + box["height"] / 2 + random.uniform(-2, 2))
+                    time.sleep(random.uniform(0.005, 0.02))
+                page.mouse.up()
+                log("attempted slider drag")
+                time.sleep(2)
+                return not check_for_captcha(page)
+            except Exception as e:
+                log(f"slider drag error: {e}")
+    return False
+
+
 def handle_captcha(page, log):
-    """Try auto-solve (#9); returns True if solved, else False (manual needed)."""
+    """Try slider drag, then external solver. Returns True if cleared."""
+    if _try_slider(page, log):
+        return True
     if captcha_solver and captcha_solver.available():
         log("attempting CAPTCHA auto-solve…")
         try:
@@ -150,6 +191,27 @@ def _first(page, selectors):
     return None
 
 
+# ─── Lightweight stock pre-check (opt-in) ─────────────────────────
+
+def fast_check(context, url, log):
+    """Cheap HTML fetch (uses the context's cookies + proxy) to short-circuit
+    obvious out-of-stock cases without a full page render. Conservative: only
+    returns 'out_of_stock' when confident, else 'unknown' (caller full-checks)."""
+    try:
+        resp = context.request.get(url, timeout=15000)
+        if not resp.ok:
+            return "unknown"
+        html = resp.text()
+        low = html.lower()
+        # Strong out-of-stock signals embedded in the PDP data.
+        if re.search(r'"(?:quantity|stock)"\s*:\s*0\b', low) or "out of stock" in low or "sold out" in low:
+            return "out_of_stock"
+        return "unknown"
+    except Exception as e:
+        log(f"fast-check error: {e}")
+        return "unknown"
+
+
 def select_variant(page, variant, log):
     if not variant:
         return True
@@ -176,8 +238,6 @@ def select_variant(page, variant, log):
 
 
 def select_payment(page, payment, log):
-    """Select the payment method on the checkout page by its visible text
-    (e.g. 'Lazada Wallet', 'Credit / Debit Card', 'Cash on Delivery'). Best-effort."""
     if not payment:
         return True
     try:
@@ -189,9 +249,7 @@ def select_payment(page, payment, log):
             h = loc.element_handle()
             if h:
                 page.evaluate(
-                    "(el) => { const c = el.closest('label, [role=\"radio\"], li, div') || el; c.click(); }",
-                    h,
-                )
+                    "(el) => { const c = el.closest('label, [role=\"radio\"], li, div') || el; c.click(); }", h)
         log(f"selected payment: {payment}")
         human_pause(0.6, 1.2)
         return True
@@ -212,7 +270,6 @@ def check_stock(page, url, variant, log):
             select_variant(page, variant, log)
         if check_for_captcha(page):
             return ("captcha", None)
-
         buttons = page.query_selector_all(SEL["buy_cart_btns"])
         add_to_cart_btn = None
         buy_now_btn = None
@@ -252,9 +309,7 @@ def set_quantity(page, quantity, log):
             break
 
 
-def complete_checkout(page, name, url, max_price, payment, log):
-    """On the checkout page: wait for load, optional price guard, choose payment,
-    Place Order, confirm. Returns 'ok' / 'retry' / 'stop'."""
+def complete_checkout(page, name, url, max_price, payment, dry_run, log):
     try:
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -276,16 +331,13 @@ def complete_checkout(page, name, url, max_price, payment, log):
 
         safe = "".join(c if c.isalnum() else "_" for c in name)[:30]
         try:
-            page.screenshot(path=os.path.join(os.path.dirname(__file__), f"checkout_{safe}.png"))
+            page.screenshot(path=os.path.join(HERE, f"checkout_{safe}.png"))
         except Exception:
             pass
         log(f"checkout page url: {page.url}")
-
         body = page.inner_text("body").lower()
 
-        # Price guard (#1, kept): abort if total exceeds max_price.
         if max_price and max_price > 0:
-            import re
             nums = [float(x.replace(",", "")) for x in re.findall(r"\$?\s*([\d,]+\.\d{2})", body)]
             total = max(nums) if nums else 0
             if total and total > max_price:
@@ -293,7 +345,6 @@ def complete_checkout(page, name, url, max_price, payment, log):
                 notify(f"⛔ *{name}* aborted — total ${total} over max ${max_price}")
                 return "stop"
 
-        # Select the chosen payment method, or keep whatever is pre-selected.
         if payment:
             select_payment(page, payment, log)
 
@@ -312,6 +363,12 @@ def complete_checkout(page, name, url, max_price, payment, log):
                     pass
             log("Place Order not found. visible buttons: " + " | ".join(btns[:15]))
             return "retry"
+
+        if dry_run:
+            log("DRY RUN — reached Place Order, NOT clicking.")
+            notifier.send_event("🧪 Dry run — ready to buy", description=name, url=url, color=0x9B59B6)
+            return "stop"
+
         try:
             place.click(timeout=5000)
         except Exception:
@@ -334,10 +391,8 @@ def complete_checkout(page, name, url, max_price, payment, log):
             if el:
                 order_no = el.inner_text().strip()
             log(f"ORDER PLACED #{order_no} SGD {amount}")
-            notifier.send_event(
-                "🎉 Order Placed!", description=name, color=0x2ECC71, url=url,
-                fields={"Order": order_no or "—", "Amount": f"SGD {amount or '?'}"}, ping=True,
-            )
+            notifier.send_event("🎉 Order Placed!", description=name, color=0x2ECC71, url=url,
+                                fields={"Order": order_no or "—", "Amount": f"SGD {amount or '?'}"}, ping=True)
             _record_order(name, order_no, amount)
             return "ok"
 
@@ -351,7 +406,7 @@ def complete_checkout(page, name, url, max_price, payment, log):
 
 def _record_order(name, order_no, amount):
     try:
-        with open(os.path.join(os.path.dirname(__file__), "orders.log"), "a", encoding="utf-8") as f:
+        with open(os.path.join(HERE, "orders.log"), "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{name}\t{order_no}\t{amount}\n")
     except Exception:
         pass
@@ -366,17 +421,15 @@ def _decorate(context):
         pass
     try:
         context.route("**/*", lambda route: (
-            route.abort() if route.request.resource_type in _BLOCK_TYPES else route.continue_()
-        ))
+            route.abort() if route.request.resource_type in _BLOCK_TYPES else route.continue_()))
     except Exception:
         pass
 
 
-def _new_context(playwright, proxy_dict, load_session=True):
+def _new_context(playwright, proxy_dict, session_file):
     browser = playwright.chromium.launch(
         channel=CHROME_CHANNEL, headless=False,
-        args=["--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"],
-    )
+        args=["--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"])
     ctx_args = {
         "viewport": {"width": 1280, "height": 800},
         "user_agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -385,25 +438,33 @@ def _new_context(playwright, proxy_dict, load_session=True):
     }
     if proxy_dict:
         ctx_args["proxy"] = proxy_dict
-    if load_session and os.path.exists(SESSION_FILE):
-        ctx_args["storage_state"] = SESSION_FILE
+    if session_file and os.path.exists(session_file):
+        ctx_args["storage_state"] = session_file
     context = browser.new_context(**ctx_args)
     _decorate(context)
     return browser, context
 
 
-# ─── Shared login ─────────────────────────────────────────────────
+# ─── Login (per profile) ──────────────────────────────────────────
 
 class LoginManager:
-    def __init__(self, phone, get_otp, log, proxy_raw=""):
+    def __init__(self, phone, get_otp, log, proxy_raw="", session_file=None):
         self.phone = phone
         self.get_otp = get_otp
         self.log = log
         self.proxy = parse_proxy(proxy_raw)
+        self.session_file = session_file or SESSION_FILE
 
     def run(self):
         with sync_playwright() as p:
-            browser, context = _new_context(p, self.proxy, load_session=False)
+            browser = p.chromium.launch(
+                channel=CHROME_CHANNEL, headless=False,
+                args=["--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage", "--start-maximized"])
+            ctx_args = {"viewport": {"width": 1280, "height": 800},
+                        "locale": "en-SG", "timezone_id": "Asia/Singapore"}
+            if self.proxy:
+                ctx_args["proxy"] = self.proxy
+            context = browser.new_context(**ctx_args)
             try:
                 context.add_init_script(_STEALTH_JS)
             except Exception:
@@ -414,8 +475,8 @@ class LoginManager:
                 page.goto("https://www.lazada.sg/#?", wait_until="domcontentloaded", timeout=30000)
                 human_pause(1.5, 2.5)
                 if is_logged_in(page):
-                    self.log("Already logged in (saved session).")
-                    context.storage_state(path=SESSION_FILE)
+                    self.log("Already logged in.")
+                    context.storage_state(path=self.session_file)
                     return True
 
                 self.log("Clicking Login…")
@@ -467,7 +528,6 @@ class LoginManager:
 
                 if check_for_captcha(page):
                     handle_captcha(page, self.log)
-                    self.log("If a CAPTCHA is shown, solve it in the window…")
                     for _ in range(60):
                         if is_logged_in(page):
                             break
@@ -475,14 +535,14 @@ class LoginManager:
 
                 page.wait_for_timeout(2500)
                 if not is_logged_in(page):
-                    self.log("Login FAILED — still showing logged-out (check OTP / CAPTCHA).")
+                    self.log("Login FAILED — still logged-out (check OTP / CAPTCHA).")
                     return False
 
                 trig = page.query_selector(SEL["account_trigger"])
                 who = trig.inner_text().strip() if trig else "account"
                 self.log(f"Logged in as: {who}")
                 notifier.send_event("✅ Logged in", description=who, color=0x3498DB)
-                context.storage_state(path=SESSION_FILE)
+                context.storage_state(path=self.session_file)
                 return True
             except Exception as e:
                 self.log(f"login error: {e}")
@@ -515,7 +575,6 @@ class TaskWorker(threading.Thread):
     def stop(self):
         self._stop.set()
 
-    # -- scheduled start (#11) --
     def _await_schedule(self):
         start_at = (self.task.get("start_at") or "").strip()
         if not start_at:
@@ -528,21 +587,19 @@ class TaskWorker(threading.Thread):
             if target <= now:
                 target += dt.timedelta(days=1)
             self.status(f"scheduled {start_at}")
-            self.log(f"waiting until {target.strftime('%Y-%m-%d %H:%M')}")
             while not self._stop.is_set() and dt.datetime.now() < target:
                 time.sleep(1)
         except Exception as e:
             self.log(f"bad start time {start_at!r}: {e}")
 
-    # -- session auto-recovery (#4): wait for the session file to refresh --
-    def _wait_for_relogin(self, prev_mtime):
+    def _wait_for_relogin(self, session_file, prev_mtime):
         self.status("session expired — re-login needed")
         self.on_needs_login(self.task["name"])
         notify(f"🔑 *{self.task['name']}*: session expired — please re-login.")
         waited = 0
         while not self._stop.is_set() and waited < 300:
             try:
-                if os.path.exists(SESSION_FILE) and os.path.getmtime(SESSION_FILE) > prev_mtime:
+                if os.path.exists(session_file) and os.path.getmtime(session_file) > prev_mtime:
                     self.log("session refreshed — resuming")
                     return True
             except Exception:
@@ -556,42 +613,62 @@ class TaskWorker(threading.Thread):
         qty = int(self.task.get("quantity", 1) or 1)
         interval = float(self.task.get("interval", 8) or 8)
         variant = (self.task.get("variant") or "").strip()
-        proxy = parse_proxy(self.task.get("proxy", ""))
+        proxy_raw = self.task.get("proxy", "")
+        proxy = parse_proxy(proxy_raw)
+        account = (self.task.get("account") or "").strip()
         alert_only = bool(self.task.get("alert_only"))
+        dry_run = bool(self.task.get("dry_run"))
         max_price = float(self.task.get("max_price") or 0)
         payment = (self.task.get("payment") or "").strip()
+        fast = bool(self.task.get("fast"))
+        session_file = session_path(account, proxy_raw)
 
         self._await_schedule()
         login_verified = False
         announced_stock = False
         fails = 0
+        errors = 0  # consecutive errors for backoff
 
         while not self._stop.is_set() and not self.purchased:
             try:
                 with sync_playwright() as p:
-                    browser, context = _new_context(p, proxy)
+                    browser, context = _new_context(p, proxy, session_file)
                     page = context.new_page()
                     rebuild = False
                     try:
                         while not self._stop.is_set() and not self.purchased:
+                            # Lightweight pre-check (opt-in) — skip full load on clear OOS.
+                            if fast:
+                                fc = fast_check(context, url, self.log)
+                                if fc == "out_of_stock":
+                                    errors = 0
+                                    self.status("out of stock (fast)")
+                                    self._wait(interval); continue
+
                             self.status("checking")
                             result, buy_btn = check_stock(page, url, variant, self.log)
 
                             if result == "captcha":
                                 self.status("CAPTCHA")
-                                if not handle_captcha(page, self.log):
-                                    notify(f"⚠️ *CAPTCHA* on *{name}* — solve in window.")
-                                    self._wait(30)
-                                continue
+                                if handle_captcha(page, self.log):
+                                    continue
+                                errors += 1
+                                notify(f"⚠️ *CAPTCHA* on *{name}* — solve in window.")
+                                self._wait(self._backoff(interval, errors)); continue
+
+                            if result == "error":
+                                errors += 1
+                                self._wait(self._backoff(interval, errors)); continue
+                            errors = 0
 
                             if result in ("in_stock", "out_of_stock") and not login_verified:
                                 if is_logged_in(page):
                                     login_verified = True
                                     self.log("session authenticated ✓")
                                 else:
-                                    prev = os.path.getmtime(SESSION_FILE) if os.path.exists(SESSION_FILE) else 0
-                                    rebuild = self._wait_for_relogin(prev)
-                                    break  # leave inner loop to rebuild context
+                                    prev = os.path.getmtime(session_file) if os.path.exists(session_file) else 0
+                                    rebuild = self._wait_for_relogin(session_file, prev)
+                                    break
 
                             if result == "in_stock":
                                 if alert_only:
@@ -618,20 +695,18 @@ class TaskWorker(threading.Thread):
                                 human_pause(2, 3)
 
                                 self.status("checking out")
-                                outcome = complete_checkout(page, name, url, max_price, payment, self.log)
+                                outcome = complete_checkout(page, name, url, max_price, payment, dry_run, self.log)
                                 if outcome == "ok":
                                     self.purchased = True
                                     self.status("purchased ✓")
-                                    self.log("done — buy-once guard engaged")
                                     return
                                 elif outcome == "stop":
                                     self.status("checkout stopped")
                                     return
-                                else:  # retry (#6)
+                                else:
                                     fails += 1
                                     if fails >= 3:
                                         self.status("checkout failed — stopped")
-                                        self.log("3 checkout attempts failed — stopping.")
                                         notify(f"⚠️ *{name}*: checkout failed 3× — stopped.")
                                         return
                                     self.log(f"checkout retry {fails}/3")
@@ -647,16 +722,21 @@ class TaskWorker(threading.Thread):
                             pass
                     if not rebuild:
                         break
-                    if not self._wait_for_relogin_done():
+                    if self._stop.is_set():
                         break
                     login_verified = False
             except Exception as e:
-                self.log(f"worker error: {e}; retrying in 15s")
-                self._wait(15)
+                errors += 1
+                wait = self._backoff(interval, errors)
+                self.log(f"worker error: {e}; backing off {wait:.0f}s")
+                self.status(f"error (retry {errors})")
+                if errors == 1 or errors % 5 == 0:
+                    notifier.send_event("💥 Task error", description=f"{name}: {e}", color=0xE74C3C)
+                self._wait(wait)
 
-    def _wait_for_relogin_done(self):
-        # _wait_for_relogin already blocked until refresh; just confirm not stopped.
-        return not self._stop.is_set()
+    @staticmethod
+    def _backoff(interval, errors):
+        return min(interval * (2 ** min(errors, 6)), 300)
 
     def _wait(self, seconds):
         seconds = seconds + random.uniform(0, max(0.0, seconds * 0.25))
@@ -665,24 +745,21 @@ class TaskWorker(threading.Thread):
             time.sleep(0.2)
 
 
-# ─── Self-test (#14): validate selectors against a live PDP ────────
+# ─── Self-test ────────────────────────────────────────────────────
 
 def self_test(url, log):
     log("self-test: launching…")
     report = []
     try:
         with sync_playwright() as p:
-            browser, context = _new_context(p, None)
+            browser, context = _new_context(p, None, SESSION_FILE)
             page = context.new_page()
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(2500)
-                checks = {
-                    "buy/cart buttons": SEL["buy_cart_btns"],
-                    "account trigger": SEL["account_trigger"],
-                    "sku selector": SEL["sku_selector"],
-                }
-                for label, sel in checks.items():
+                for label, sel in {"buy/cart buttons": SEL["buy_cart_btns"],
+                                   "account trigger": SEL["account_trigger"],
+                                   "sku selector": SEL["sku_selector"]}.items():
                     ok = page.query_selector(sel) is not None
                     report.append(f"{'✓' if ok else '✗'} {label} ({sel})")
                 report.append(f"logged in: {is_logged_in(page)}")

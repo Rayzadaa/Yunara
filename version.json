@@ -1,5 +1,6 @@
 {
-  "version": "2.2",
+  "version": "2.3",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "notes": "Payment method selection + in-app auto-update."
+  "sha256": "ae33404c243efef4e5e7315c48721bfe747ea0c2f63363348d62568fd54273f3",
+  "notes": "Multi-account, per-profile sessions/proxy fix, fast monitor, update SHA-256 verification, slider CAPTCHA attempt, error backoff, crash alerts, dry-run, CI, dark UI."
 }
