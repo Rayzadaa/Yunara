@@ -19,7 +19,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.4"
+VERSION = "2.4.1"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -369,6 +369,7 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log):
             notifier.send_event("🧪 Dry run — ready to buy", description=name, url=url, color=0x9B59B6)
             return "stop"
 
+        existing = list(page.context.pages)
         try:
             place.click(timeout=5000)
         except Exception:
@@ -377,29 +378,51 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log):
                 page.evaluate("(el) => el.click()", h)
 
         human_pause(3.0, 5.0)
-        if check_for_captcha(page):
-            handle_captcha(page, log)
-        page.wait_for_timeout(2500)
+
+        # The PayNow / cashier page often opens in a NEW TAB — follow it, else the
+        # original tab is left blank and we'd capture an empty screenshot.
+        target = page
+        for _ in range(12):
+            extra = [pg for pg in page.context.pages if pg not in existing]
+            if extra:
+                target = extra[-1]
+                try:
+                    target.wait_for_load_state("domcontentloaded", timeout=8000)
+                except Exception:
+                    pass
+                log(f"followed new tab: {target.url}")
+                break
+            time.sleep(0.5)
+
+        # Let the payment page actually render before reading it.
+        try:
+            target.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        target.wait_for_timeout(2500)
+
+        if check_for_captcha(target):
+            handle_captcha(target, log)
 
         result_png = os.path.join(HERE, f"checkout_{safe}_result.png")
         try:
-            page.screenshot(path=result_png)
+            target.screenshot(path=result_png, full_page=True)
         except Exception:
             pass
         try:
-            post = page.inner_text("body").lower()
+            post = target.inner_text("body").lower()
         except Exception:
             post = ""
-        post_url = (page.url or "").lower()
+        post_url = (target.url or "").lower()
 
         # 1) Instant success — Wallet/card paid, thank-you page.
-        if page.query_selector(SEL["thank_you"]):
+        if target.query_selector(SEL["thank_you"]):
             amount = ""
-            el = page.query_selector(SEL["thank_you_amount"])
+            el = target.query_selector(SEL["thank_you_amount"])
             if el:
                 amount = el.inner_text().strip()
             order_no = ""
-            el = page.query_selector(SEL["thank_you_order"])
+            el = target.query_selector(SEL["thank_you_order"])
             if el:
                 order_no = el.inner_text().strip()
             log(f"ORDER PLACED #{order_no} SGD {amount}")

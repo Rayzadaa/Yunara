@@ -1,6 +1,6 @@
 {
-  "version": "2.4",
+  "version": "2.4.1",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "b8dab1799a8246288ee8e38fa6d0e7b178afb33cd4485e8cd03fdebdae19ee7d",
-  "notes": "Handles PayNow / pending-payment orders: no false 'checkout failed', and the PayNow QR is sent to Discord with a pay-within-30-min alert."
+  "sha256": "9a02b1aa03feed053ccf9f32ccda1df343fd461a0c58503fde1ddbdfb10cf8ef",
+  "notes": "Follow the PayNow payment tab and send the actual QR screenshot to Discord (was capturing the blank original tab)."
 }

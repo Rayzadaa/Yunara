@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.4.1 — capture the PayNow QR from the new tab
+- The PayNow page opens in a **new tab**, so the bot was screenshotting the (blank)
+  original tab. It now **follows the new tab**, waits for it to render, and sends a
+  **full-page** screenshot — so the actual QR / payment details reach Discord.
+
 ## v2.4 — PayNow / pending-payment orders
 - **Handles PayNow / bank-transfer orders.** When Place Order reserves the order
   but needs a manual payment (no instant Wallet/card), the bot now recognises it
