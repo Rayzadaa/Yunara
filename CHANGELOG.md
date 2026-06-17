@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.4.2 — purchase-limit detection
+- Recognises Lazada's **"reached the limit for this product (OC03)"** — the account
+  is already at the per-item max. The task now stops cleanly with a clear
+  "limit reached" status + Discord note, instead of retrying 3× and reporting a
+  vague "couldn't confirm".
+
 ## v2.4.1 — capture the PayNow QR from the new tab
 - The PayNow page opens in a **new tab**, so the bot was screenshotting the (blank)
   original tab. It now **follows the new tab**, waits for it to render, and sends a

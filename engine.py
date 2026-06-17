@@ -19,7 +19,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -431,7 +431,15 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log):
             _record_order(name, order_no, amount)
             return "ok"
 
-        # 2) Still on the checkout page -> order was NOT placed; retry.
+        # 2) Per-product purchase limit reached (Lazada OC03) — terminal, no retry.
+        if "reached the limit" in post or "oc03" in post:
+            log("purchase limit reached (OC03) — account already at max for this item")
+            notifier.send_event("🚫 Purchase limit reached",
+                                description=f"{name}: your account is already at the max quantity for this product.",
+                                color=0x95A5A6, url=url)
+            return "limit"
+
+        # 3) Still on the checkout page -> order was NOT placed; retry.
         if "select payment method" in post and "place order" in post:
             log("still on checkout after Place Order — not placed")
             return "retry"
@@ -771,6 +779,9 @@ class TaskWorker(threading.Thread):
                                     self.purchased = True
                                     self.status("purchased ✓" if outcome == "ok"
                                                 else "ORDERED — PAY (PayNow, 30 min)")
+                                    return
+                                elif outcome == "limit":
+                                    self.status("limit reached — stopped")
                                     return
                                 elif outcome == "stop":
                                     self.status("checkout stopped")
