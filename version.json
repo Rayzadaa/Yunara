@@ -1,6 +1,6 @@
 {
-  "version": "2.5.2",
+  "version": "2.5.3",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "ed8e785c80ff715e3417470847654131d77b8e5362b91352f638a78e39f72a07",
-  "notes": "Add PayNow Transfer to the payment options so the bot can place QR-paid orders (fixes the 'not placed' loop from card payments)."
+  "sha256": "d9924a8f9f624e8293fceb539f611be539ceddc875fd67925de5db21ef78cc1a",
+  "notes": "Stop blocking images in the browser — it was breaking Lazada's CAPTCHA so it couldn't be solved. CAPTCHA/login/checkout now render fully."
 }

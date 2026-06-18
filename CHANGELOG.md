@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.5.3 — fix unsolvable CAPTCHA (image blocking)
+- Removed in-browser image/font blocking. It was stripping the images out of
+  Lazada's robot-check, so the CAPTCHA couldn't render and **couldn't be solved**.
+  CAPTCHAs, login, and checkout pages now display fully.
+
 ## v2.5.2 — PayNow in the payment dropdown
 - Added **PayNow Transfer** to the task Payment-method options. Choosing it lets the
   bot place orders that pay by QR (no card details to enter), which also fixes the

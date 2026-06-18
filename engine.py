@@ -20,7 +20,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.5.2"
+VERSION = "2.5.3"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -516,13 +516,11 @@ def _record_order(name, order_no, amount):
 # ─── Context builders ─────────────────────────────────────────────
 
 def _decorate(context):
+    # NOTE: we intentionally do NOT block images/fonts here — doing so strips the
+    # images out of Lazada's CAPTCHA (and login/checkout), making it unsolvable.
+    # Lightweight monitoring is handled separately by the opt-in fast_check().
     try:
         context.add_init_script(_STEALTH_JS)
-    except Exception:
-        pass
-    try:
-        context.route("**/*", lambda route: (
-            route.abort() if route.request.resource_type in _BLOCK_TYPES else route.continue_()))
     except Exception:
         pass
 
