@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.5 — per-task proxy pool, better proxy test, quick edit
+- **Per-task proxy list** — each task can hold multiple proxies (one per line). It
+  fails over to the next proxy if one errors out (re-login stays on the same proxy).
+- **Accurate proxy test** — "Test all" now does a lightweight IP-echo request (no
+  browser, no heavy page) and reports true latency **plus the exit IP**, instead of
+  a slow full Lazada homepage load.
+- **Quick edit** — double-click a task's Variant, Qty or Interval cell in the table
+  to edit it inline (no dialog). Saves immediately; applies on the task's next start.
+
 ## v2.4.3 — push the QR on success too
 - On a successful order, the bot now also sends the **full-page order/QR
   screenshot** to Discord (not just a text confirmation), so an AFK user still

@@ -11,6 +11,7 @@ import re
 import threading
 import time
 
+import requests
 from playwright.sync_api import sync_playwright
 
 import notifier
@@ -19,7 +20,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.4.3"
+VERSION = "2.5"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -92,20 +93,31 @@ def parse_proxy(raw):
     return None
 
 
-def test_proxy(raw, timeout_ms=15000):
+def test_proxy(raw, timeout=15):
+    """Lightweight latency test: fetch a tiny IP-echo endpoint through the proxy
+    (no browser, no heavy page) and report round-trip ms + the exit IP."""
     proxy = parse_proxy(raw)
     if not proxy:
         return (False, "unparseable")
+    server = proxy["server"]
+    if "username" in proxy:
+        scheme, rest = server.split("://", 1)
+        purl = f"{scheme}://{proxy['username']}:{proxy['password']}@{rest}"
+    else:
+        purl = server
+    proxies = {"http": purl, "https": purl}
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(channel=CHROME_CHANNEL, headless=True)
-            ctx = browser.new_context(proxy=proxy)
-            page = ctx.new_page()
-            t0 = time.time()
-            page.goto("https://www.lazada.sg", wait_until="domcontentloaded", timeout=timeout_ms)
-            ms = int((time.time() - t0) * 1000)
-            browser.close()
-            return (True, f"ok ({ms} ms)")
+        t0 = time.time()
+        r = requests.get("https://api.ipify.org?format=json", proxies=proxies, timeout=timeout)
+        ms = int((time.time() - t0) * 1000)
+        if not r.ok:
+            return (False, f"HTTP {r.status_code}")
+        ip = ""
+        try:
+            ip = r.json().get("ip", "")
+        except Exception:
+            pass
+        return (True, f"ok ({ms} ms, exit IP {ip or '?'})")
     except Exception as e:
         return (False, str(e).splitlines()[0][:80])
 
@@ -646,9 +658,11 @@ class TaskWorker(threading.Thread):
         self.task = task
         self.on_log = on_log
         self.on_status = on_status
-        self.on_needs_login = on_needs_login or (lambda name: None)
+        self.on_needs_login = on_needs_login or (lambda *a: None)
         self._stop = threading.Event()
         self.purchased = False
+        self._account = ""
+        self._cur_proxy = ""
 
     def log(self, m):
         self.on_log(self.task["name"], m)
@@ -678,7 +692,7 @@ class TaskWorker(threading.Thread):
 
     def _wait_for_relogin(self, session_file, prev_mtime):
         self.status("session expired — re-login needed")
-        self.on_needs_login(self.task["name"])
+        self.on_needs_login(self.task["name"], self._account, self._cur_proxy)
         notify(f"🔑 *{self.task['name']}*: session expired — please re-login.")
         waited = 0
         while not self._stop.is_set() and waited < 300:
@@ -697,23 +711,34 @@ class TaskWorker(threading.Thread):
         qty = int(self.task.get("quantity", 1) or 1)
         interval = float(self.task.get("interval", 8) or 8)
         variant = (self.task.get("variant") or "").strip()
-        proxy_raw = self.task.get("proxy", "")
-        proxy = parse_proxy(proxy_raw)
         account = (self.task.get("account") or "").strip()
         alert_only = bool(self.task.get("alert_only"))
         dry_run = bool(self.task.get("dry_run"))
         max_price = float(self.task.get("max_price") or 0)
         payment = (self.task.get("payment") or "").strip()
         fast = bool(self.task.get("fast"))
-        session_file = session_path(account, proxy_raw)
+        self._account = account
+
+        # Per-task proxy pool — fails over to the next proxy on a worker error.
+        proxies_list = self.task.get("proxies")
+        if not proxies_list:
+            single = self.task.get("proxy", "")
+            proxies_list = [single] if single else [""]
 
         self._await_schedule()
-        login_verified = False
         announced_stock = False
         fails = 0
         errors = 0  # consecutive errors for backoff
+        pidx = 0
 
         while not self._stop.is_set() and not self.purchased:
+            current_raw = proxies_list[pidx % len(proxies_list)]
+            self._cur_proxy = current_raw
+            proxy = parse_proxy(current_raw)
+            session_file = session_path(account, current_raw)
+            login_verified = False
+            if len(proxies_list) > 1:
+                self.log(f"using proxy {(pidx % len(proxies_list)) + 1}/{len(proxies_list)}")
             try:
                 with sync_playwright() as p:
                     browser, context = _new_context(p, proxy, session_file)
@@ -812,9 +837,10 @@ class TaskWorker(threading.Thread):
                         break
                     if self._stop.is_set():
                         break
-                    login_verified = False
+                    # relogin happened — loop again on the SAME proxy.
             except Exception as e:
                 errors += 1
+                pidx += 1  # fail over to the next proxy in the pool
                 wait = self._backoff(interval, errors)
                 self.log(f"worker error: {e}; backing off {wait:.0f}s")
                 self.status(f"error (retry {errors})")

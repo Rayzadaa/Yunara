@@ -9,6 +9,7 @@ except Exception:
 import json
 import os
 import queue
+import re
 import subprocess
 import threading
 from datetime import datetime
@@ -73,7 +74,7 @@ class Bridge(QObject):
     status = pyqtSignal(str, str)
     otp_request = pyqtSignal()
     login_done = pyqtSignal(bool, str)
-    needs_login = pyqtSignal(str)
+    needs_login = pyqtSignal(str, str, str)
     update_found = pyqtSignal(dict)
     update_done = pyqtSignal(bool, str)
 
@@ -104,11 +105,12 @@ class TaskDialog(QDialog):
         for pm in PAYMENTS:
             self.payment.addItem(pm)
         self.payment.setEditText(t.get("payment", ""))
-        self.proxy = QComboBox(); self.proxy.setEditable(True); self.proxy.addItem("")
-        for px in proxies:
-            self.proxy.addItem(px)
-        if t.get("proxy"):
-            self.proxy.setEditText(t["proxy"])
+        self.proxy = QPlainTextEdit(); self.proxy.setMaximumHeight(80)
+        self.proxy.setPlaceholderText("one proxy per line — host:port[:user:pass]; rotates/fails over; blank = none")
+        existing = t.get("proxies")
+        if not existing and t.get("proxy"):
+            existing = [t["proxy"]]
+        self.proxy.setPlainText("\n".join(existing or []))
         self.alert_only = QCheckBox("Alert only (notify, don't buy)"); self.alert_only.setChecked(bool(t.get("alert_only")))
         self.dry_run = QCheckBox("Dry run (stop at Place Order, don't click)"); self.dry_run.setChecked(bool(t.get("dry_run")))
         self.fast = QCheckBox("Fast monitor (lightweight pre-check)"); self.fast.setChecked(bool(t.get("fast")))
@@ -122,7 +124,7 @@ class TaskDialog(QDialog):
         form.addRow("Max price ($)", self.maxprice)
         form.addRow("Scheduled start", self.start_at)
         form.addRow("Payment method", self.payment)
-        form.addRow("Proxy", self.proxy)
+        form.addRow("Proxies (one/line)", self.proxy)
         form.addRow("", self.alert_only)
         form.addRow("", self.dry_run)
         form.addRow("", self.fast)
@@ -139,7 +141,8 @@ class TaskDialog(QDialog):
             "account": self.account.currentText().strip(), "variant": self.variant.text().strip(),
             "quantity": self.qty.value(), "interval": self.interval.value(),
             "max_price": self.maxprice.value(), "start_at": self.start_at.text().strip(),
-            "payment": self.payment.currentText().strip(), "proxy": self.proxy.currentText().strip(),
+            "payment": self.payment.currentText().strip(),
+            "proxies": [ln.strip() for ln in self.proxy.toPlainText().splitlines() if ln.strip()],
             "alert_only": self.alert_only.isChecked(), "dry_run": self.dry_run.isChecked(),
             "fast": self.fast.isChecked(),
         }
@@ -252,6 +255,7 @@ class MainWindow(QMainWindow):
         self.webhook_url = ""; self.role_id = ""
         self.otp_queue = queue.Queue()
         self._login_busy = False
+        self._refreshing = False
 
         self.bridge = Bridge()
         self.bridge.log.connect(self.on_log)
@@ -287,9 +291,10 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget(0, len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
         self.table.horizontalHeader().setSectionResizeMode(C_URL, QHeaderView.ResizeMode.Stretch)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSortingEnabled(True)
+        self.table.itemChanged.connect(self.on_item_changed)
         root.addWidget(self.table, 3)
         root.addWidget(QLabel("Log"))
         self.logview = QTextEdit(); self.logview.setReadOnly(True)
@@ -301,6 +306,9 @@ class MainWindow(QMainWindow):
             try:
                 data = json.load(open(DATA_FILE, encoding="utf-8"))
                 self.tasks = data.get("tasks", [])
+                for t in self.tasks:  # migrate old single proxy -> list
+                    if "proxies" not in t:
+                        t["proxies"] = [t["proxy"]] if t.get("proxy") else []
                 self.proxies = data.get("proxies", [])
                 self.accounts = data.get("accounts", [])
                 self.webhook_url = data.get("webhook", ""); self.role_id = data.get("role", "")
@@ -323,24 +331,63 @@ class MainWindow(QMainWindow):
             m += "·fast"
         return m
 
+    def _cell(self, text, editable=False):
+        it = QTableWidgetItem(text)
+        if not editable:
+            it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        return it
+
     def _refresh_table(self):
+        self._refreshing = True
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         for t in self.tasks:
             r = self.table.rowCount(); self.table.insertRow(r)
-            self.table.setItem(r, C_NAME, QTableWidgetItem(t["name"]))
-            self.table.setItem(r, C_URL, QTableWidgetItem(t["url"]))
-            self.table.setItem(r, C_ACCT, QTableWidgetItem(t.get("account", "") or "default"))
-            self.table.setItem(r, C_VAR, QTableWidgetItem(t.get("variant", "") or "—"))
-            self.table.setItem(r, C_QTY, QTableWidgetItem(str(t.get("quantity", 1))))
-            self.table.setItem(r, C_PROXY, QTableWidgetItem(t.get("proxy", "") or "—"))
-            self.table.setItem(r, C_INT, QTableWidgetItem(str(t.get("interval", 8)) + "s"))
-            self.table.setItem(r, C_MODE, QTableWidgetItem(self._mode(t)))
-            self.table.setItem(r, C_STATUS, QTableWidgetItem("idle"))
+            pl = t.get("proxies") or ([t["proxy"]] if t.get("proxy") else [])
+            proxy_txt = f"{len(pl)} proxies" if len(pl) > 1 else (pl[0] if pl else "—")
+            self.table.setItem(r, C_NAME, self._cell(t["name"]))
+            self.table.setItem(r, C_URL, self._cell(t["url"]))
+            self.table.setItem(r, C_ACCT, self._cell(t.get("account", "") or "default"))
+            self.table.setItem(r, C_VAR, self._cell(t.get("variant", "") or "—", editable=True))
+            self.table.setItem(r, C_QTY, self._cell(str(t.get("quantity", 1)), editable=True))
+            self.table.setItem(r, C_PROXY, self._cell(proxy_txt))
+            self.table.setItem(r, C_INT, self._cell(str(t.get("interval", 8)) + "s", editable=True))
+            self.table.setItem(r, C_MODE, self._cell(self._mode(t)))
+            self.table.setItem(r, C_STATUS, self._cell("idle"))
             btn = QPushButton("▶ Start")
             btn.clicked.connect(lambda _, n=t["name"]: self.toggle_task(n))
             self.table.setCellWidget(r, C_ACT, btn)
         self.table.setSortingEnabled(True)
+        self._refreshing = False
+
+    def on_item_changed(self, item):
+        if self._refreshing:
+            return
+        col, row = item.column(), item.row()
+        nameit = self.table.item(row, C_NAME)
+        if not nameit:
+            return
+        name = nameit.text()
+        t = next((x for x in self.tasks if x["name"] == name), None)
+        if not t:
+            return
+        val = item.text().strip()
+        if col == C_VAR:
+            t["variant"] = "" if val == "—" else val
+        elif col == C_QTY:
+            t["quantity"] = max(1, int(re.sub(r"\D", "", val) or 1))
+        elif col == C_INT:
+            t["interval"] = max(2, int(re.sub(r"\D", "", val) or 8))
+        else:
+            return
+        self._save()
+        self.log_line(name, "edited (applies on next start)" if name in self.workers else "edited")
+        self._refreshing = True
+        if col == C_INT:
+            item.setText(f"{t['interval']}s")
+        elif col == C_QTY:
+            item.setText(str(t["quantity"]))
+        self._refreshing = False
 
     def _row_of(self, name):
         for r in range(self.table.rowCount()):
@@ -366,9 +413,11 @@ class MainWindow(QMainWindow):
     def on_status(self, name, status):
         r = self._row_of(name)
         if r is not None:
-            item = QTableWidgetItem(status)
+            self._refreshing = True
+            item = self._cell(status)
             item.setForeground(status_color(status))
             self.table.setItem(r, C_STATUS, item)
+            self._refreshing = False
         self.log_line(name, f"status → {status}")
         if status.startswith("purchased") or status.startswith("checkout") or status.startswith("error"):
             self._set_row_button(name, start=True)
@@ -437,11 +486,10 @@ class MainWindow(QMainWindow):
         else:
             self.login_lbl.setText(f"❌ Login failed ({label})")
 
-    def on_needs_login(self, name):
-        t = next((x for x in self.tasks if x["name"] == name), None)
-        if t and not self._login_busy:
-            self.log_line(name, f"auto re-login for account '{t.get('account') or 'default'}'")
-            self.do_login(t.get("account", ""), t.get("proxy", ""))
+    def on_needs_login(self, name, account, proxy):
+        if not self._login_busy:
+            self.log_line(name, f"auto re-login for account '{account or 'default'}'")
+            self.do_login(account, proxy)
 
     # ---- task CRUD ----
     def _selected_name(self):
@@ -545,7 +593,7 @@ class MainWindow(QMainWindow):
             task,
             on_log=lambda n, m: self.bridge.log.emit(n, m),
             on_status=lambda n, s: self.bridge.status.emit(n, s),
-            on_needs_login=lambda n: self.bridge.needs_login.emit(n))
+            on_needs_login=lambda n, a, px: self.bridge.needs_login.emit(n, a, px))
         self.workers[name] = worker
         worker.start()
         self._set_row_button(name, start=False)
@@ -558,7 +606,9 @@ class MainWindow(QMainWindow):
         self._set_row_button(name, start=True)
         r = self._row_of(name)
         if r is not None:
-            self.table.setItem(r, C_STATUS, QTableWidgetItem("idle"))
+            self._refreshing = True
+            self.table.setItem(r, C_STATUS, self._cell("idle"))
+            self._refreshing = False
 
     def start_all(self):
         for t in self.tasks:
