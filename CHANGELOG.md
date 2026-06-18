@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.6.1 — scope keyword monitor to one shop
+- A keyword task can now be **scoped to a single shop**: put the seller's store URL
+  in the Product URL field alongside the keyword, and it only scans that shop's
+  listings for new matches (instead of all of Lazada). Leave it blank for site-wide.
+
 ## v2.6 — keyword (search) monitoring
 - **Keyword monitor** — a task can now watch Lazada *search results* for a keyword
   instead of a fixed product URL. Set the **Keyword** field; it scans the search,

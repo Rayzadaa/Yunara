@@ -1,6 +1,6 @@
 {
-  "version": "2.6",
+  "version": "2.6.1",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "08a6fd885b4f956e2ae871df845ecf423b9a253179cb1ece5803ade4adbe09bf",
-  "notes": "Keyword (search) monitoring: watch Lazada search for a keyword and ping Discord when a new matching listing appears."
+  "sha256": "05f6e1e017333bb91e213bfefc273700cf7dedaa78f57ff0930afc5649e076bd",
+  "notes": "Scope keyword monitoring to a single shop: put the seller's store URL alongside the keyword."
 }

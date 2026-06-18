@@ -91,7 +91,7 @@ class TaskDialog(QDialog):
         self.name = QLineEdit(t.get("name", ""))
         self.url = QLineEdit(t.get("url", ""))
         self.keyword = QLineEdit(t.get("keyword", ""))
-        self.keyword.setPlaceholderText("search-monitor: alerts on NEW listings matching these words (alert-only)")
+        self.keyword.setPlaceholderText("search-monitor: alerts on NEW matches (alert-only). Put a shop's store URL in Product URL to scope to one seller.")
         self.account = QComboBox(); self.account.addItem("")
         for a in accounts:
             self.account.addItem(a["label"])

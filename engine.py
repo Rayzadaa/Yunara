@@ -20,7 +20,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.6"
+VERSION = "2.6.1"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -331,16 +331,24 @@ def check_stock(page, url, variant, log):
         return ("error", None)
 
 
-def keyword_check(page, keyword, seen, log):
-    """Scan Lazada search results for `keyword`. Adds matches to `seen` and
-    returns (status, new_matches) where new_matches is a list of (title, url)
-    not seen before. status is 'ok' / 'captcha' / 'error'."""
-    import urllib.parse
-    q = urllib.parse.quote(keyword)
-    url = f"https://www.lazada.sg/catalog/?q={q}"
+def keyword_check(page, keyword, seen, log, scope_url=""):
+    """Scan for `keyword` matches. If `scope_url` is given (e.g. a shop's store
+    page or a category), scan that page; otherwise scan global Lazada search.
+    Adds matches to `seen` and returns (status, new_matches) of (title, url)."""
+    if scope_url:
+        url = scope_url
+    else:
+        import urllib.parse
+        url = f"https://www.lazada.sg/catalog/?q={urllib.parse.quote(keyword)}"
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(2500)
+        page.wait_for_timeout(2000)
+        # nudge lazy-loaded product grids to render
+        try:
+            page.mouse.wheel(0, 2500)
+            page.wait_for_timeout(1200)
+        except Exception:
+            pass
         if check_for_captcha(page):
             return ("captcha", [])
         terms = [t.lower() for t in keyword.split() if t.strip()]
@@ -795,7 +803,7 @@ class TaskWorker(threading.Thread):
         keyword = (self.task.get("keyword") or "").strip()
         if keyword:
             self._await_schedule()
-            self._run_keyword(keyword, interval, account)
+            self._run_keyword(keyword, interval, account, (self.task.get("url") or "").strip())
             return
 
         # Per-task proxy pool — fails over to the next proxy on a worker error.
@@ -943,15 +951,16 @@ class TaskWorker(threading.Thread):
                     notifier.send_event("💥 Task error", description=f"{name}: {e}", color=0xE74C3C)
                 self._wait(wait)
 
-    def _run_keyword(self, keyword, interval, account):
-        """Alert-only mode: watch Lazada search for `keyword`, ping on new listings."""
+    def _run_keyword(self, keyword, interval, account, scope_url=""):
+        """Alert-only mode: watch Lazada search (or one shop, if scope_url given)
+        for `keyword`, ping on new listings."""
         name = self.task["name"]
         plist = self.task.get("proxies") or ([self.task["proxy"]] if self.task.get("proxy") else [""])
         proxy = parse_proxy(plist[0] if plist else "")
         session_file = session_path(account, "")
         seen = set()
         first = True
-        self.log(f"keyword monitor: '{keyword}'")
+        self.log(f"keyword monitor: '{keyword}'" + (f" within {scope_url}" if scope_url else " (all Lazada)"))
         while not self._stop.is_set():
             try:
                 with sync_playwright() as p:
@@ -960,7 +969,7 @@ class TaskWorker(threading.Thread):
                     try:
                         while not self._stop.is_set():
                             self.status("scanning")
-                            res, items = keyword_check(page, keyword, seen, self.log)
+                            res, items = keyword_check(page, keyword, seen, self.log, scope_url)
                             if res == "captcha":
                                 self.status("CAPTCHA — solve in window")
                                 notify(f"⚠️ *CAPTCHA* on *{name}* (keyword) — solve in window.")
