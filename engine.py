@@ -20,7 +20,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.6.2"
+VERSION = "2.6.3"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -399,6 +399,30 @@ def set_quantity(page, quantity, log):
             break
 
 
+def _click_confirm(page, log):
+    """Click a post-Place-Order confirmation button if a dialog popped up."""
+    for sel in [".next-dialog .next-btn-primary", ".next-overlay-wrapper .next-btn-primary",
+                "[role='dialog'] .next-btn-primary", "[role='dialog'] button"]:
+        try:
+            b = page.query_selector(sel)
+            if b and b.is_visible():
+                b.click(timeout=3000)
+                log(f"clicked confirm dialog ({sel})")
+                return True
+        except Exception:
+            pass
+    for txt in ["Confirm Order", "Confirm Payment", "Confirm", "Pay Now", "Proceed"]:
+        try:
+            loc = page.get_by_text(txt, exact=True).first
+            if loc.count() > 0 and loc.is_visible():
+                loc.click(timeout=3000)
+                log(f"clicked confirm: '{txt}'")
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def complete_checkout(page, name, url, max_price, payment, dry_run, log):
     try:
         try:
@@ -472,7 +496,16 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log):
             if h:
                 page.evaluate("(el) => el.click()", h)
 
-        human_pause(3.0, 5.0)
+        human_pause(1.5, 2.5)
+
+        # Some checkouts pop a confirmation dialog after Place Order — capture it
+        # (for tuning) and click its Confirm button.
+        try:
+            page.screenshot(path=os.path.join(HERE, f"checkout_{safe}_confirm.png"))
+        except Exception:
+            pass
+        _click_confirm(page, log)
+        human_pause(2.0, 3.0)
 
         # The PayNow / cashier page often opens in a NEW TAB — follow it, else the
         # original tab is left blank and we'd capture an empty screenshot.

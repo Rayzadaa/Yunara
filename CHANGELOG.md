@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.6.3 — click the post-Place-Order confirmation
+- Some checkouts show a **confirmation dialog after Place Order** that must be
+  confirmed. The bot now clicks that Confirm button (and saves a
+  `checkout_<task>_confirm.png` of the dialog for tuning).
+
 ## v2.6.2 — ping works for a user OR a role
 - The Discord ping field now accepts **either a user ID or a role ID** and pings
   correctly either way (it was only doing role mentions before, so a user ID got
