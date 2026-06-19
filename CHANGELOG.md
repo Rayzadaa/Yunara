@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.6.4 — faster checkout
+- Checkout no longer waits out long fixed timeouts (a ~6s new-tab wait + an ~8s
+  "network idle" wait that Lazada never satisfies). It now **polls fast and resolves
+  the moment** the thank-you / payment / error page appears — noticeably quicker on
+  instant (Wallet/card) orders. Trimmed the post-Buy-Now pause too.
+
 ## v2.6.3 — click the post-Place-Order confirmation
 - Some checkouts show a **confirmation dialog after Place Order** that must be
   confirmed. The bot now clicks that Confirm button (and saves a

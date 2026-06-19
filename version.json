@@ -1,6 +1,6 @@
 {
-  "version": "2.6.3",
+  "version": "2.6.4",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "3d1638d67c65c82c4d0c3d0fd5987c558f77447e92985152ffe3d05856869542",
-  "notes": "Click the confirmation dialog that some checkouts show after Place Order."
+  "sha256": "b1cca0ad152fe53588cfd8213e7caa1248adfb5056dbe813a6f02dc77b32ce4f",
+  "notes": "Faster checkout: poll for the result instead of waiting out long fixed timeouts."
 }

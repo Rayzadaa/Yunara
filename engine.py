@@ -20,7 +20,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.6.3"
+VERSION = "2.6.4"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -496,39 +496,43 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log):
             if h:
                 page.evaluate("(el) => el.click()", h)
 
-        human_pause(1.5, 2.5)
+        human_pause(0.6, 1.0)
 
-        # Some checkouts pop a confirmation dialog after Place Order — capture it
-        # (for tuning) and click its Confirm button.
+        # Capture + click any post-Place-Order confirmation dialog.
         try:
             page.screenshot(path=os.path.join(HERE, f"checkout_{safe}_confirm.png"))
         except Exception:
             pass
         _click_confirm(page, log)
-        human_pause(2.0, 3.0)
 
-        # The PayNow / cashier page often opens in a NEW TAB — follow it, else the
-        # original tab is left blank and we'd capture an empty screenshot.
+        # Poll fast for the outcome — instant thank-you, a new payment tab (PayNow),
+        # or an error/pending state — and resolve the moment one appears, instead of
+        # waiting out long fixed timeouts (the main source of slowness).
+        existing_set = set(existing)
         target = page
-        for _ in range(12):
-            extra = [pg for pg in page.context.pages if pg not in existing]
+        followed = False
+        keys = ["thank you for your purchase", "order has been placed", "paynow",
+                "scan to pay", "complete your payment", "pay within", "reference no",
+                "reached the limit", "oc03", "unavailable item"]
+        end = time.time() + 15
+        while time.time() < end:
+            extra = [pg for pg in page.context.pages if pg not in existing_set]
             if extra:
                 target = extra[-1]
-                try:
-                    target.wait_for_load_state("domcontentloaded", timeout=8000)
-                except Exception:
-                    pass
-                log(f"followed new tab: {target.url}")
+                if not followed:
+                    followed = True
+                    log(f"followed new tab: {target.url}")
+            try:
+                if target.query_selector(SEL["thank_you"]):
+                    break
+                snap = target.inner_text("body").lower()
+            except Exception:
+                snap = ""
+            if any(k in snap for k in keys):
                 break
             time.sleep(0.5)
 
-        # Let the payment page actually render before reading it.
-        try:
-            target.wait_for_load_state("networkidle", timeout=8000)
-        except Exception:
-            pass
-        target.wait_for_timeout(2500)
-
+        target.wait_for_timeout(600)
         if check_for_captcha(target):
             handle_captcha(target, log)
 
@@ -934,7 +938,7 @@ class TaskWorker(threading.Thread):
                                 except Exception as e:
                                     self.log(f"buy click failed: {e}")
                                     self._wait(interval); continue
-                                human_pause(2, 3)
+                                human_pause(0.8, 1.5)
 
                                 self.status("checking out")
                                 outcome = complete_checkout(page, name, url, max_price, payment, dry_run, self.log)
