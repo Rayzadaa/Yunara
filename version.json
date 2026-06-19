@@ -1,6 +1,6 @@
 {
-  "version": "2.7",
+  "version": "2.7.1",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "f952d2376dfa0eee5b299230b9a9078d55b8119efcd843c126be29ab8c0624bc",
-  "notes": "Watch-list task: HTTP-poll a batch of product URLs in parallel and open a browser only to check out the one that drops."
+  "sha256": "e0ba6ebada6af4ed62a93b7d8550f4749c18fc5849c19eea3f2bde9f84d57c1d",
+  "notes": "Watch-list HTTP check now resolves s.lazada.sg short links to the real product before reading stock."
 }

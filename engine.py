@@ -20,7 +20,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.7"
+VERSION = "2.7.1"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -384,30 +384,47 @@ def keyword_check(page, keyword, seen, log, scope_url=""):
         return ("error", [])
 
 
+_HTTP_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+    "Accept-Language": "en-SG,en;q=0.9",
+}
+
+
+def _parse_stock(low):
+    m = re.search(r'"(?:quantity|stock)"\s*:\s*"?(\d+)', low)
+    if m:
+        return "in_stock" if int(m.group(1)) > 0 else "out_of_stock"
+    if any(s in low for s in ["out of stock", "sold out", "add to wishlist"]):
+        return "out_of_stock"
+    if "add to cart" in low or "buy now" in low:
+        return "in_stock"
+    return "unknown"
+
+
 def http_stock(url):
-    """Browser-free stock check via a single HTTP GET. Returns
-    'in_stock' / 'out_of_stock' / 'captcha' / 'unknown' (heuristic, no log — safe
-    to run in a thread pool)."""
+    """Browser-free stock check via HTTP. Resolves s.lazada.sg short links to the
+    real product page, then reads stock. Returns
+    'in_stock' / 'out_of_stock' / 'captcha' / 'unknown' (heuristic, thread-safe)."""
     try:
-        headers = {
-            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                           "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-            "Accept-Language": "en-SG,en;q=0.9",
-        }
-        r = requests.get(url, headers=headers, timeout=12)
+        r = requests.get(url, headers=_HTTP_HEADERS, timeout=12)
         if not r.ok:
             return "unknown"
         final = (r.url or "").lower()
         if "/punish" in final or "captcha" in final or "sec.lazada" in final:
             return "captcha"
-        low = r.text.lower()
-        m = re.search(r'"(?:quantity|stock)"\s*:\s*"?(\d+)', low)
-        if m:
-            return "in_stock" if int(m.group(1)) > 0 else "out_of_stock"
-        if any(s in low for s in ["out of stock", "sold out", "add to wishlist"]):
-            return "out_of_stock"
-        if "add to cart" in low or "buy now" in low:
-            return "in_stock"
+        result = _parse_stock(r.text.lower())
+        if result != "unknown":
+            return result
+        # Short-link JS stub? Pull the real product URL out of it and re-check.
+        m = re.search(r'https?://[^"\'<>\\ ]*lazada\.[^"\'<>\\ ]*/products/[^"\'<>\\ ]+\.html', r.text, re.I)
+        if m and m.group(0).split("?")[0].lower() != final.split("?")[0]:
+            r2 = requests.get(m.group(0), headers=_HTTP_HEADERS, timeout=12)
+            if r2.ok:
+                f2 = (r2.url or "").lower()
+                if any(t in f2 for t in ["/punish", "captcha", "sec.lazada"]):
+                    return "captcha"
+                return _parse_stock(r2.text.lower())
         return "unknown"
     except Exception:
         return "unknown"

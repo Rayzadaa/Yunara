@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.7.1 — watch list reads short links
+- The lightweight HTTP check now **resolves `s.lazada.sg` short links** to the real
+  product page before reading stock, so watch-list URLs can be short links (they used
+  to come back "unknown"). Verified against real listings.
+
 ## v2.7 — watch-list (lightweight concurrent monitor)
 - New **Watch list** task: put many product URLs (one per line) and it **HTTP-polls
   them all in parallel** (a thread pool, no browser) for stock. When one looks like
