@@ -3,14 +3,7 @@ import os
 import re
 import requests
 
-# Bot-token fields are optional/legacy — webhook is the preferred path.
-try:
-    from config import DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID
-except Exception:
-    DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID = "", ""
-
-API = "https://discord.com/api/v10"
-
+# Notifications go through a Discord webhook only (no bot token needed).
 _webhook_url = ""
 _role_id = ""
 
@@ -38,35 +31,17 @@ def _to_discord(text):
     return re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"**\1**", text)
 
 
-def _bot_configured():
-    return (DISCORD_BOT_TOKEN and "your_discord" not in DISCORD_BOT_TOKEN
-            and DISCORD_CHANNEL_ID and "your_discord" not in str(DISCORD_CHANNEL_ID))
-
-
 def _post(payload):
-    if _webhook_url:
-        try:
-            r = requests.post(_webhook_url, json=payload, timeout=10)
-            if not r.ok:
-                print(f"Discord webhook error {r.status_code}: {r.text}")
-            return r.ok
-        except Exception as e:
-            print(f"Discord webhook error: {e}")
-            return False
-    if _bot_configured():
-        try:
-            r = requests.post(
-                f"{API}/channels/{DISCORD_CHANNEL_ID}/messages",
-                headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}"},
-                json=payload, timeout=10,
-            )
-            if not r.ok:
-                print(f"Discord send error {r.status_code}: {r.text}")
-            return r.ok
-        except Exception as e:
-            print(f"Discord send error: {e}")
-            return False
-    return False
+    if not _webhook_url:
+        return False
+    try:
+        r = requests.post(_webhook_url, json=payload, timeout=10)
+        if not r.ok:
+            print(f"Discord webhook error {r.status_code}: {r.text}")
+        return r.ok
+    except Exception as e:
+        print(f"Discord webhook error: {e}")
+        return False
 
 
 def send_message(text):

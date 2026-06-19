@@ -35,6 +35,10 @@ orders.log
 Lazada-Bot-Share/
 Lazada-Bot-Share.zip
 
+# release signing private key — NEVER commit/share
+signing_key.txt
+signing_key*.txt
+
 #images
 *.png
 *.jpg

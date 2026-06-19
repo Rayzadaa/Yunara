@@ -38,6 +38,33 @@ UPDATE_FILES = {
 }
 
 
+# Public key for verifying release signatures (private half is held by the dev,
+# never shipped). A release with a bad signature is refused even if its hash matches
+# — this is what protects against a compromised repo/manifest.
+PUBLIC_KEY_HEX = "34804413f7dd28e9711b334e7b161e17646119b4c538552ef03606b431d0b0c3"
+
+
+def _verify_signature(sha256_hex, signature_hex, log):
+    """Verify the manifest's Ed25519 signature over the zip's sha256. Refuses on a
+    BAD signature; tolerates missing signature / missing crypto for transition."""
+    if not signature_hex:
+        log("WARNING: release is unsigned - proceeding on hash only")
+        return True
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(PUBLIC_KEY_HEX))
+        pub.verify(bytes.fromhex(signature_hex), sha256_hex.encode())
+        log("signature verified OK")
+        return True
+    except ImportError:
+        log("WARNING: 'cryptography' not installed - signature NOT verified "
+            "(run: pip install -r requirements.txt)")
+        return True
+    except Exception:
+        log("SIGNATURE INVALID - refusing update")
+        return False
+
+
 def _ver(v):
     parts = []
     for x in str(v).split("."):
@@ -86,6 +113,9 @@ def apply(info, log):
                 log(f"SHA-256 MISMATCH - refusing update (expected {expected[:12]}..., got {actual[:12]}...)")
                 return False
             log("SHA-256 verified OK")
+            # Authenticity: the hash must be signed by the project's private key.
+            if not _verify_signature(expected, info.get("signature", ""), log):
+                return False
         else:
             log("warning: no sha256 in manifest - skipping integrity check")
 

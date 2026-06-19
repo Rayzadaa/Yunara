@@ -1,6 +1,7 @@
 {
-  "version": "2.7.1",
+  "version": "2.8",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "e0ba6ebada6af4ed62a93b7d8550f4749c18fc5849c19eea3f2bde9f84d57c1d",
-  "notes": "Watch-list HTTP check now resolves s.lazada.sg short links to the real product before reading stock."
+  "sha256": "fa2624b880a76886e60ee365793b44b6c115a4de33752e3691cbac5c9ac49e09",
+  "signature": "131f7d87cf223206ea51331709756b5a42fc86c3ee250600b46a5bbbc5bd17e3ea2408e13d61b84b8cdbec801ef0826e41b88bf0d83a69e2c8af97f02045b100",
+  "notes": "Security: signed updates (Ed25519), removed the unused Discord bot token, pinned dependencies."
 }

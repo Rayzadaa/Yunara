@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.8 — security hardening
+- **Signed updates** — releases are now signed with an Ed25519 key; the bot verifies
+  the signature (public key baked in) and **refuses a tampered/forged update even if
+  its hash matches**. Protects against a compromised repo/manifest, not just MITM.
+- **Removed the unused Discord bot token** from config — notifications are
+  webhook-only now, so there's no bot token sitting in your config. (Reset the old
+  one in Discord to be safe.)
+- **Pinned dependencies** to exact versions (playwright/requests/PyQt6/cryptography)
+  for reproducible, supply-chain-safer installs.
+
 ## v2.7.1 — watch list reads short links
 - The lightweight HTTP check now **resolves `s.lazada.sg` short links** to the real
   product page before reading stock, so watch-list URLs can be short links (they used

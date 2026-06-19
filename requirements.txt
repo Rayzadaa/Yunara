@@ -1,3 +1,4 @@
-playwright>=1.40
-requests>=2.31
-PyQt6>=6.6
+playwright==1.60.0
+requests==2.34.2
+PyQt6==6.11.0
+cryptography==49.0.0
