@@ -95,10 +95,14 @@ class TaskDialog(QDialog):
         self.watchlist = QPlainTextEdit(); self.watchlist.setMaximumHeight(90)
         self.watchlist.setPlaceholderText("watch-list: one product URL per line — HTTP-polled in parallel; a browser opens only to check out a drop")
         self.watchlist.setPlainText("\n".join(t.get("watchlist", []) or []))
-        self.account = QComboBox(); self.account.addItem("")
-        for a in accounts:
-            self.account.addItem(a["label"])
-        self.account.setCurrentText(t.get("account", ""))
+        self.account = QComboBox(); self.account.setEditable(True); self.account.addItem("")
+        labels = [a["label"] for a in accounts]
+        for lbl in labels:
+            self.account.addItem(lbl)
+        cur = t.get("account", "")
+        if cur and cur not in labels:
+            self.account.addItem(cur)  # keep the task's account even if the list changed
+        self.account.setCurrentText(cur)
         self.variant = QLineEdit(t.get("variant", ""))
         self.variant.setPlaceholderText("exact option text, e.g. Sealed ETB — blank if none")
         self.qty = QSpinBox(); self.qty.setRange(1, 99); self.qty.setValue(int(t.get("quantity", 1)))
@@ -283,7 +287,7 @@ class MainWindow(QMainWindow):
         central = QWidget(); self.setCentralWidget(central)
         root = QVBoxLayout(central)
         bar = QHBoxLayout()
-        self.login_btn = QPushButton("🔐 Login"); self.login_btn.clicked.connect(lambda: self.do_login())
+        self.login_btn = QPushButton("🔐 Login"); self.login_btn.clicked.connect(self.login_clicked)
         self.login_lbl = QLabel("Not logged in")
         bar.addWidget(self.login_btn); bar.addWidget(self.login_lbl); bar.addStretch(1)
         for text, fn in [
@@ -455,6 +459,18 @@ class MainWindow(QMainWindow):
             if a["label"] == account_label:
                 return a["phone"]
         return ""
+
+    def login_clicked(self):
+        """Let the user pick which account to log in (default = config phone)."""
+        if self.accounts:
+            choices = ["(default account)"] + [a["label"] for a in self.accounts]
+            choice, ok = QInputDialog.getItem(self, "Login", "Log in as which account?",
+                                              choices, 0, False)
+            if not ok:
+                return
+            self.do_login("" if choice.startswith("(default") else choice)
+        else:
+            self.do_login()
 
     def do_login(self, account_label="", proxy_raw=""):
         if self._login_busy:

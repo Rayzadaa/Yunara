@@ -20,7 +20,7 @@ data = open(ZIP, "rb").read()
 sha = hashlib.sha256(data).hexdigest()
 sig = priv.sign(sha.encode()).hex()
 
-m = json.load(open(MANIFEST, encoding="utf-8"))
+m = json.load(open(MANIFEST, encoding="utf-8-sig"))
 m["sha256"] = sha
 m["signature"] = sig
 json.dump(m, open(MANIFEST, "w", encoding="utf-8"), indent=2)

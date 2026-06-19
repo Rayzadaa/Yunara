@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.8.1 — multi-account login fixes
+- **Login picker** — the Login button now asks **which account** to log in (default or
+  any account you've defined), so you can log into a specific account directly.
+- **Fixed account loss** — editing a task no longer drops its account if it isn't in
+  the current accounts list (the dropdown now preserves it and is editable).
+
 ## v2.8 — security hardening
 - **Signed updates** — releases are now signed with an Ed25519 key; the bot verifies
   the signature (public key baked in) and **refuses a tampered/forged update even if
