@@ -1,7 +1,7 @@
 {
-  "version": "2.8.1",
+  "version": "2.8.2",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "156a3f6e63c363b46eeea10faff5993051f401e61f0fc042589898aa25b3791d",
-  "signature": "05ba8ff09df28f2e976c6f8f5cd807e5ce696532f9648cb7a9f2549f8fb702e3fdbbfe4e2e71bf35bc4d01086de106bc5ee9d4d9b6eaa641dca2d95f6a94f506",
-  "notes": "Multi-account: login picker to choose which account, and editing a task no longer drops its account."
+  "sha256": "764a857542bbb8a5ce0d13043aa75208267f0af51a685f559d5d8a2386cb7748",
+  "signature": "4573e73725bf3a2d14bed7fda2daa81fc1c24a4059120e3dc659b7b70b7b705699cd409c8a1cdd56f92ccd229d671bd4c1f29e781be0b473b9e3c829b4c2e105",
+  "notes": "Added GUIDE.md \u2014 full usage guide plus tips to improve checkout win-rate."
 }

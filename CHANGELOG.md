@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.8.2 — user guide
+- Added **GUIDE.md** — full how-to-use plus tips to maximise checkout win-rate
+  (Wallet funded, warm session, real IP, one focused task, correct variant, etc.).
+
 ## v2.8.1 — multi-account login fixes
 - **Login picker** — the Login button now asks **which account** to log in (default or
   any account you've defined), so you can log into a specific account directly.
