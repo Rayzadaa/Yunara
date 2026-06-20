@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.9.0 — desktop alerts + order history
+- **Desktop alerts** — when a task hits the events that need you (**in stock**,
+  **order placed**, **CAPTCHA**), the bot now pops a **Windows notification** and
+  plays a **sound**, on top of the Discord ping — handy when you're at the PC but
+  away from the chat. Toggle both under the new **🖥 Alerts…** button; alerts fire
+  only on state changes, so a repeating status won't spam you.
+- **Order history** — new **📜 Orders** button opens an in-app viewer of every
+  placed order (time, product, order #, amount) read from `orders.log`, with a
+  summary line and pending-payment (PayNow) orders highlighted.
+
 ## v2.8.2 — user guide
 - Added **GUIDE.md** — full how-to-use plus tips to maximise checkout win-rate
   (Wallet funded, warm session, real IP, one focused task, correct variant, etc.).

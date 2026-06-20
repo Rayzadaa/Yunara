@@ -20,9 +20,10 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QTableWidget, QTableWidgetItem, QTextEdit, QDialog, QLineEdit,
     QSpinBox, QDoubleSpinBox, QFormLayout, QPlainTextEdit, QInputDialog,
-    QMessageBox, QHeaderView, QComboBox, QCheckBox,
+    QMessageBox, QHeaderView, QComboBox, QCheckBox, QSystemTrayIcon, QStyle,
 )
 
+import desktop_alert
 import engine
 import notifier
 import updater
@@ -31,6 +32,7 @@ HERE = os.path.dirname(__file__)
 DATA_FILE = os.path.join(HERE, "bot_data.json")
 LOG_FILE = os.path.join(HERE, "bot.log")
 CHANGELOG = os.path.join(HERE, "CHANGELOG.md")
+ORDERS_FILE = os.path.join(HERE, "orders.log")
 
 PAYMENTS = ["", "PayNow Transfer", "Lazada Wallet", "Credit / Debit Card",
             "Cash on Delivery", "PayLater", "GrabPay", "Bank Transfer"]
@@ -255,6 +257,88 @@ class ChangelogDialog(QDialog):
         close = QPushButton("Close"); close.clicked.connect(self.accept); lay.addWidget(close)
 
 
+class AlertsDialog(QDialog):
+    def __init__(self, parent, desktop_on, sound_on):
+        super().__init__(parent)
+        self.parent_win = parent
+        self.setWindowTitle("Desktop alerts"); self.resize(440, 0)
+        form = QFormLayout(self)
+        form.addRow(QLabel("Pop a Windows notification + sound on the events that\n"
+                           "need you — in stock, order placed, CAPTCHA — for when\n"
+                           "you're at the PC but away from Discord."))
+        self.desktop = QCheckBox("Show desktop notifications"); self.desktop.setChecked(desktop_on)
+        self.sound = QCheckBox("Play alert sound"); self.sound.setChecked(sound_on)
+        form.addRow(self.desktop); form.addRow(self.sound)
+        row = QHBoxLayout()
+        test = QPushButton("Test"); test.clicked.connect(self._test)
+        ok = QPushButton("Save"); cancel = QPushButton("Cancel")
+        ok.clicked.connect(self.accept); cancel.clicked.connect(self.reject)
+        row.addWidget(test); row.addStretch(1); row.addWidget(cancel); row.addWidget(ok)
+        form.addRow(row)
+
+    def _test(self):
+        if self.sound.isChecked():
+            desktop_alert.enabled = True
+            desktop_alert.play("order")
+        if self.desktop.isChecked():
+            self.parent_win.show_tray_message("Lazada Bot", "Desktop alerts are working ✓", "order")
+
+    def get(self):
+        return self.desktop.isChecked(), self.sound.isChecked()
+
+
+class OrdersDialog(QDialog):
+    """In-app viewer for orders.log (tab-separated: time, product, order#, amount)."""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Order history"); self.resize(740, 470)
+        lay = QVBoxLayout(self)
+        self.summary = QLabel(""); lay.addWidget(self.summary)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Time", "Product", "Order #", "Amount"])
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        lay.addWidget(self.table)
+        row = QHBoxLayout()
+        refresh = QPushButton("Refresh"); refresh.clicked.connect(self._load)
+        close = QPushButton("Close"); close.clicked.connect(self.accept)
+        row.addWidget(refresh); row.addStretch(1); row.addWidget(close)
+        lay.addLayout(row)
+        self._load()
+
+    def _load(self):
+        rows = []
+        try:
+            with open(ORDERS_FILE, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) >= 2:
+                        parts += [""] * (4 - len(parts))
+                        rows.append(parts[:4])
+        except FileNotFoundError:
+            rows = []
+        except Exception:
+            rows = []
+        rows.reverse()  # newest first
+        self.table.setRowCount(0)
+        pending = 0
+        for ts, name, order_no, amount in rows:
+            if order_no == "pending-payment":
+                pending += 1
+            r = self.table.rowCount(); self.table.insertRow(r)
+            label = "pending payment" if order_no == "pending-payment" else order_no
+            for c, val in enumerate([ts, name, label, amount]):
+                item = QTableWidgetItem(val)
+                if order_no == "pending-payment":
+                    item.setForeground(QColor("#faa61a"))
+                self.table.setItem(r, c, item)
+        total = len(rows)
+        self.summary.setText(
+            f"{total} order(s) · {total - pending} confirmed · {pending} pending payment"
+            if total else "No orders yet — placed orders will be logged here.")
+
+
 # ─── Main window ──────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -269,6 +353,8 @@ class MainWindow(QMainWindow):
         self.otp_queue = queue.Queue()
         self._login_busy = False
         self._refreshing = False
+        self.desktop_alerts = True; self.alert_sound = True
+        self._last_alert = {}  # task name -> last alert category fired
 
         self.bridge = Bridge()
         self.bridge.log.connect(self.on_log)
@@ -284,6 +370,17 @@ class MainWindow(QMainWindow):
         threading.Thread(target=self._check_updates_bg, args=(False,), daemon=True).start()
 
     def _build_ui(self):
+        # System-tray icon — used for desktop notification toasts.
+        self.tray = None
+        try:
+            if QSystemTrayIcon.isSystemTrayAvailable():
+                icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+                self.tray = QSystemTrayIcon(icon, self)
+                self.tray.setToolTip("Lazada Bot")
+                self.tray.show()
+        except Exception:
+            self.tray = None
+
         central = QWidget(); self.setCentralWidget(central)
         root = QVBoxLayout(central)
         bar = QHBoxLayout()
@@ -294,6 +391,7 @@ class MainWindow(QMainWindow):
             ("➕ Add", self.add_task), ("✎ Edit", self.edit_task), ("⧉ Dup", self.dup_task),
             ("🗑 Remove", self.remove_task), ("👤 Accounts…", self.manage_accounts),
             ("🌐 Proxies…", self.manage_proxies), ("🔔 Discord…", self.manage_webhook),
+            ("🖥 Alerts…", self.manage_alerts), ("📜 Orders", self.show_orders),
             ("🧪 Self-test", self.run_self_test), ("📋 Changelog", self.show_changelog),
             ("⬇ Updates", self.check_updates),
             ("▶ Start All", self.start_all), ("■ Stop All", self.stop_all),
@@ -326,6 +424,9 @@ class MainWindow(QMainWindow):
                 self.accounts = data.get("accounts", [])
                 self.webhook_url = data.get("webhook", ""); self.role_id = data.get("role", "")
                 notifier.set_webhook(self.webhook_url); notifier.set_role(self.role_id)
+                self.desktop_alerts = data.get("desktop_alerts", True)
+                self.alert_sound = data.get("alert_sound", True)
+                desktop_alert.enabled = self.alert_sound
             except Exception:
                 pass
         if os.path.exists(engine.SESSION_FILE):
@@ -335,7 +436,8 @@ class MainWindow(QMainWindow):
 
     def _save(self):
         json.dump({"tasks": self.tasks, "proxies": self.proxies, "accounts": self.accounts,
-                   "webhook": self.webhook_url, "role": self.role_id},
+                   "webhook": self.webhook_url, "role": self.role_id,
+                   "desktop_alerts": self.desktop_alerts, "alert_sound": self.alert_sound},
                   open(DATA_FILE, "w", encoding="utf-8"), indent=2)
 
     def _mode(self, t):
@@ -438,10 +540,60 @@ class MainWindow(QMainWindow):
             self.table.setItem(r, C_STATUS, item)
             self._refreshing = False
         self.log_line(name, f"status → {status}")
+        self._maybe_alert(name, status)
         if status.startswith("purchased") or status.startswith("checkout") or status.startswith("error"):
             self._set_row_button(name, start=True)
             if status.startswith("purchased") or status.startswith("checkout"):
                 self.workers.pop(name, None)
+
+    # ---- desktop alerts ----
+    @staticmethod
+    def _alert_category(status):
+        s = status.lower()
+        if "purchased" in s or "ordered" in s:
+            return "order"
+        if "in stock" in s:
+            return "stock"
+        if "captcha" in s:
+            return "captcha"
+        return None
+
+    def _maybe_alert(self, name, status):
+        cat = self._alert_category(status)
+        # Only fire when the category actually changes, so a status that repeats
+        # (stock → checking → stock) doesn't re-alert every poll.
+        if not cat or self._last_alert.get(name) == cat:
+            return
+        self._last_alert[name] = cat
+        titles = {"order": "🎉 Order placed", "stock": "🟢 In stock",
+                  "captcha": "⚠️ CAPTCHA — solve it"}
+        if self.desktop_alerts:
+            self.show_tray_message(titles.get(cat, "Lazada Bot"), f"{name}: {status}", cat)
+        if self.alert_sound:
+            desktop_alert.enabled = True
+            desktop_alert.play(cat)
+
+    def show_tray_message(self, title, message, cat="order"):
+        if not self.tray:
+            return
+        try:
+            mi = QSystemTrayIcon.MessageIcon
+            icon = mi.Warning if cat == "captcha" else mi.Information
+            self.tray.showMessage(title, message, icon, 8000)
+        except Exception:
+            pass
+
+    def manage_alerts(self):
+        dlg = AlertsDialog(self, self.desktop_alerts, self.alert_sound)
+        if dlg.exec():
+            self.desktop_alerts, self.alert_sound = dlg.get()
+            desktop_alert.enabled = self.alert_sound
+            self._save()
+            self.log_line("alerts", f"desktop {'on' if self.desktop_alerts else 'off'}, "
+                                    f"sound {'on' if self.alert_sound else 'off'}")
+
+    def show_orders(self):
+        OrdersDialog(self).exec()
 
     def _set_row_button(self, name, start):
         r = self._row_of(name)
@@ -626,6 +778,7 @@ class MainWindow(QMainWindow):
             on_status=lambda n, s: self.bridge.status.emit(n, s),
             on_needs_login=lambda n, a, px: self.bridge.needs_login.emit(n, a, px))
         self.workers[name] = worker
+        self._last_alert.pop(name, None)
         worker.start()
         self._set_row_button(name, start=False)
         self.log_line(name, "started")

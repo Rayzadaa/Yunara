@@ -1,7 +1,7 @@
 {
-  "version": "2.8.2",
+  "version": "2.9.0",
   "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "764a857542bbb8a5ce0d13043aa75208267f0af51a685f559d5d8a2386cb7748",
-  "signature": "4573e73725bf3a2d14bed7fda2daa81fc1c24a4059120e3dc659b7b70b7b705699cd409c8a1cdd56f92ccd229d671bd4c1f29e781be0b473b9e3c829b4c2e105",
-  "notes": "Added GUIDE.md \u2014 full usage guide plus tips to improve checkout win-rate."
+  "sha256": "e5ae66fd0378efeaa01cbda392822616aa72105cc6423b383c5acd5d1179b6b8",
+  "signature": "bb39db61c39b74d86d4fadc558eb646fc5a5189e7927a9922b8aa67458324e5c1f897d70d77fce147d0c4b058fac0a8a89bc73e548cd88a964233f2e38e89409",
+  "notes": "Desktop alerts (Windows notification + sound on in-stock / order / CAPTCHA) and an in-app Order history viewer."
 }
