@@ -22,7 +22,7 @@ HERE = os.path.dirname(__file__)
 # Dev: set this to your hosted version.json URL. Empty = update checks disabled.
 # Concrete default points at the GitHub repo's raw manifest. Change owner/repo or
 # branch (main vs master) if yours differs; or override via UPDATE_URL in config.py.
-UPDATE_URL = "https://raw.githubusercontent.com/ryujintcg/lazada-bot/main/version.json"
+UPDATE_URL = "https://raw.githubusercontent.com/Rayzadaa/lazada-bot/main/version.json"
 try:
     from config import UPDATE_URL as _CFG_URL
     if _CFG_URL:

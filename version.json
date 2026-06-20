@@ -1,7 +1,7 @@
 {
-  "version": "2.9.1",
-  "url": "https://github.com/ryujintcg/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "7ea7af1e9543dadd030a69f14460c57d26d81800cea4e9ea70dd95e37ff5b536",
-  "signature": "5e681c3f2a0ea471a02177b4af04538fddc0e6bf1cfbd6a491e141fb4732ecb9375475d3baa9028ae00028ef6bb3e569257fb9f2538201ad1b92e524ae5cef09",
-  "notes": "UI refresh \u2014 color-coded status pills, a live summary bar, a grouped toolbar with a Settings menu, tidier table/buttons, and a cleaner log."
+  "version": "2.9.2",
+  "url": "https://github.com/Rayzadaa/lazada-bot/releases/latest/download/Lazada-Bot-Share.zip",
+  "sha256": "86cd5b17f69f0ab31664d0f21f528d2dc6c9b6a24185f6c08f0ef754f01749fe",
+  "signature": "7fddbc62063f3520f5f4749c52b5b5c9f54938afe4d5f49c30405b936bcd220f9bcdbdef12af1e2159f7316c58c76ced449157de2e2279d54290273c2631ef03",
+  "notes": "Maintenance: point the in-app updater at the renamed GitHub account so auto-updates keep working."
 }

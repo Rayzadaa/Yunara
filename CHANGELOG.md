@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.9.2 — updater points at renamed repo
+- The in-app updater now points at the project's new GitHub location, so auto-updates
+  keep working after the account rename. No feature changes.
+
 ## v2.9.1 — UI refresh
 - **Status pills** — task status now shows as a clean, color-coded badge (green / red /
   amber / gray / blue) instead of tinted text, with consistent padding and spacing.
