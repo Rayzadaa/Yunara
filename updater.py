@@ -35,7 +35,7 @@ except Exception:
 UPDATE_FILES = {
     "gui_app.py", "engine.py", "notifier.py", "captcha_solver.py", "updater.py",
     "requirements.txt", "run_gui.bat", "SETUP.md", "CHANGELOG.md", "config.example.py",
-    "GUIDE.md",
+    "GUIDE.md", "desktop_alert.py",
 }
 
 

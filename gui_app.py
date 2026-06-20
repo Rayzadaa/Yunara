@@ -23,7 +23,10 @@ from PyQt6.QtWidgets import (
     QMessageBox, QHeaderView, QComboBox, QCheckBox, QSystemTrayIcon, QStyle,
 )
 
-import desktop_alert
+try:
+    import desktop_alert
+except Exception:  # update transition: module may be absent on first launch
+    desktop_alert = None
 import engine
 import notifier
 import updater
@@ -277,7 +280,7 @@ class AlertsDialog(QDialog):
         form.addRow(row)
 
     def _test(self):
-        if self.sound.isChecked():
+        if self.sound.isChecked() and desktop_alert:
             desktop_alert.enabled = True
             desktop_alert.play("order")
         if self.desktop.isChecked():
@@ -426,7 +429,8 @@ class MainWindow(QMainWindow):
                 notifier.set_webhook(self.webhook_url); notifier.set_role(self.role_id)
                 self.desktop_alerts = data.get("desktop_alerts", True)
                 self.alert_sound = data.get("alert_sound", True)
-                desktop_alert.enabled = self.alert_sound
+                if desktop_alert:
+                    desktop_alert.enabled = self.alert_sound
             except Exception:
                 pass
         if os.path.exists(engine.SESSION_FILE):
@@ -569,7 +573,7 @@ class MainWindow(QMainWindow):
                   "captcha": "⚠️ CAPTCHA — solve it"}
         if self.desktop_alerts:
             self.show_tray_message(titles.get(cat, "Lazada Bot"), f"{name}: {status}", cat)
-        if self.alert_sound:
+        if self.alert_sound and desktop_alert:
             desktop_alert.enabled = True
             desktop_alert.play(cat)
 
@@ -587,7 +591,8 @@ class MainWindow(QMainWindow):
         dlg = AlertsDialog(self, self.desktop_alerts, self.alert_sound)
         if dlg.exec():
             self.desktop_alerts, self.alert_sound = dlg.get()
-            desktop_alert.enabled = self.alert_sound
+            if desktop_alert:
+                desktop_alert.enabled = self.alert_sound
             self._save()
             self.log_line("alerts", f"desktop {'on' if self.desktop_alerts else 'off'}, "
                                     f"sound {'on' if self.alert_sound else 'off'}")
