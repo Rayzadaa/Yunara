@@ -19,8 +19,12 @@ try:
     import captcha_solver
 except Exception:
     captcha_solver = None
+try:
+    import secure_store
+except Exception:  # new module: may be absent on clients updated with an older whitelist
+    secure_store = None
 
-VERSION = "2.9.4"
+VERSION = "2.9.5"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -72,6 +76,24 @@ def session_path(account="", proxy_raw=""):
         return SESSION_FILE
     h = hashlib.md5(key.encode()).hexdigest()[:10]
     return os.path.join(HERE, f"lazada_session_{h}.json")
+
+
+def _load_session_arg(session_file):
+    """Value for new_context's storage_state: a decrypted dict (sealed or legacy,
+    via secure_store) or the raw path (fallback). None if no usable session."""
+    if not session_file or not os.path.exists(session_file):
+        return None
+    if secure_store:
+        return secure_store.load(session_file)  # dict, or None if unreadable
+    return session_file  # fallback: let Playwright read the plaintext file
+
+
+def _save_session(context, session_file):
+    """Persist the login session, DPAPI-sealed at rest when secure_store is present."""
+    if secure_store:
+        secure_store.save(session_file, context.storage_state())
+    else:
+        context.storage_state(path=session_file)
 
 
 # ─── Proxy ────────────────────────────────────────────────────────
@@ -205,10 +227,24 @@ def _first(page, selectors):
 
 # ─── Lightweight stock pre-check (opt-in) ─────────────────────────
 
+def _is_lazada_host(url):
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return host == "lazada.sg" or host.endswith(".lazada.sg") or host.endswith(".lazada.com")
+
+
 def fast_check(context, url, log):
     """Cheap HTML fetch (uses the context's cookies + proxy) to short-circuit
     obvious out-of-stock cases without a full page render. Conservative: only
     returns 'out_of_stock' when confident, else 'unknown' (caller full-checks)."""
+    # Never drive the logged-in context at a non-Lazada host — if a stray URL
+    # slips into a task, fall through to the normal browser path instead of
+    # sending an authenticated request somewhere unexpected.
+    if not _is_lazada_host(url):
+        return "unknown"
     try:
         resp = context.request.get(url, timeout=15000)
         if not resp.ok:
@@ -698,8 +734,9 @@ def _new_context(playwright, proxy_dict, session_file):
     }
     if proxy_dict:
         ctx_args["proxy"] = proxy_dict
-    if session_file and os.path.exists(session_file):
-        ctx_args["storage_state"] = session_file
+    sa = _load_session_arg(session_file)
+    if sa is not None:
+        ctx_args["storage_state"] = sa
     context = browser.new_context(**ctx_args)
     _decorate(context)
     return browser, context
@@ -736,7 +773,7 @@ class LoginManager:
                 human_pause(1.5, 2.5)
                 if is_logged_in(page):
                     self.log("Already logged in.")
-                    context.storage_state(path=self.session_file)
+                    _save_session(context, self.session_file)
                     return True
 
                 self.log("Clicking Login…")
@@ -802,7 +839,7 @@ class LoginManager:
                 who = trig.inner_text().strip() if trig else "account"
                 self.log(f"Logged in as: {who}")
                 notifier.send_event("✅ Logged in", description=who, color=0x3498DB)
-                context.storage_state(path=self.session_file)
+                _save_session(context, self.session_file)
                 return True
             except Exception as e:
                 self.log(f"login error: {e}")

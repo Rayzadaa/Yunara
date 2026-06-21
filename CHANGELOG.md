@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.9.5 — encrypted sessions at rest
+- **Session files are now encrypted on disk.** Login cookies (full account access)
+  were stored as plaintext; they're now sealed with Windows DPAPI bound to your
+  Windows user — a copied/backed-up/synced session file can't be read on another
+  account or PC. Existing sessions keep working and are re-sealed on next login.
+  (Falls back to plaintext only if encryption is unavailable, so logins never break.)
+- **Fast-monitor requests are restricted to Lazada hosts**, so the logged-in
+  browser context never makes an authenticated request to an unexpected URL.
+
 ## v2.9.4 — security hardening
 - **Updater now fails closed.** Updates are refused unless the manifest carries a
   valid sha256 **and** a valid Ed25519 signature. Previously a manifest could skip

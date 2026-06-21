@@ -1,7 +1,7 @@
 {
-  "version": "2.9.4",
+  "version": "2.9.5",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "f059350dde53158768b11e8291be29aa8f41cecbaa9f03f98b301f4b77e601bc",
-  "signature": "5a80d0f37491489d156dae4193a47266cb1b08013da351e98120db2dc2a9d975afef9013ecbdc2b6c2e599825698e5f8d4a9926edc2d209937023f6a5094c205",
-  "notes": "Security: the updater now fails closed (a valid sha256 + Ed25519 signature are mandatory), and 2captcha calls use HTTPS."
+  "sha256": "93aabefc1371d41b4bbca9ce4c7adb9f06e17f7445f676a50c538a547c18d0cb",
+  "signature": "5c3ffb8cc7be9b1410b1197e244c06b595c395cf64b2652789e7bcf750b10f099c85d9739135060150b97160af12efa923d130907f9df1de8c8254ad04ea720a",
+  "notes": "Security: login session files are now encrypted at rest (Windows DPAPI), and fast-monitor requests are restricted to Lazada hosts."
 }
