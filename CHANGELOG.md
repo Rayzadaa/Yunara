@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.9.4 — security hardening
+- **Updater now fails closed.** Updates are refused unless the manifest carries a
+  valid sha256 **and** a valid Ed25519 signature. Previously a manifest could skip
+  the signature/hash check, which would have let a hijacked/forged update URL push
+  unverified code. The signing protection is now non-bypassable.
+- **2captcha calls use HTTPS** so the API key is no longer sent in cleartext.
+
 ## v2.9.3 — updater points at renamed repo
 - The in-app updater now points at the project's new repository name, so auto-updates
   keep working after the repo rename. No feature changes.

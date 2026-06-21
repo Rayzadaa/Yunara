@@ -46,20 +46,24 @@ PUBLIC_KEY_HEX = "34804413f7dd28e9711b334e7b161e17646119b4c538552ef03606b431d0b0
 
 
 def _verify_signature(sha256_hex, signature_hex, log):
-    """Verify the manifest's Ed25519 signature over the zip's sha256. Refuses on a
-    BAD signature; tolerates missing signature / missing crypto for transition."""
+    """Verify the manifest's Ed25519 signature over the zip's sha256.
+
+    Fails CLOSED: a missing signature, an uninstalled crypto library, or a bad
+    signature all REFUSE the update. This is the core defense against a
+    compromised repo/manifest (e.g. a hijacked URL serving a forged update), so
+    it must never be skippable — an attacker would simply omit the signature."""
     if not signature_hex:
-        log("WARNING: release is unsigned - proceeding on hash only")
-        return True
+        log("REFUSING UPDATE - release has no signature")
+        return False
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except ImportError:
+        log("REFUSING UPDATE - 'cryptography' not installed (run: pip install -r requirements.txt)")
+        return False
+    try:
         pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(PUBLIC_KEY_HEX))
         pub.verify(bytes.fromhex(signature_hex), sha256_hex.encode())
         log("signature verified OK")
-        return True
-    except ImportError:
-        log("WARNING: 'cryptography' not installed - signature NOT verified "
-            "(run: pip install -r requirements.txt)")
         return True
     except Exception:
         log("SIGNATURE INVALID - refusing update")
@@ -106,19 +110,20 @@ def apply(info, log):
             data = r.read()
             f.write(data)
 
-        # Integrity check: if the manifest provides a sha256, the download must match.
+        # Integrity + authenticity are MANDATORY (fail closed). A manifest with
+        # no sha256 or no signature is refused — never install unverified code.
         expected = (info.get("sha256") or "").strip().lower()
-        if expected:
-            actual = hashlib.sha256(data).hexdigest()
-            if actual != expected:
-                log(f"SHA-256 MISMATCH - refusing update (expected {expected[:12]}..., got {actual[:12]}...)")
-                return False
-            log("SHA-256 verified OK")
-            # Authenticity: the hash must be signed by the project's private key.
-            if not _verify_signature(expected, info.get("signature", ""), log):
-                return False
-        else:
-            log("warning: no sha256 in manifest - skipping integrity check")
+        if not expected:
+            log("REFUSING UPDATE - manifest has no sha256")
+            return False
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != expected:
+            log(f"SHA-256 MISMATCH - refusing update (expected {expected[:12]}..., got {actual[:12]}...)")
+            return False
+        log("SHA-256 verified OK")
+        # The hash must be signed by the project's private key.
+        if not _verify_signature(expected, info.get("signature", ""), log):
+            return False
 
         updated = 0
         with zipfile.ZipFile(zpath) as z:

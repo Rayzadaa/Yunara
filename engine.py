@@ -20,7 +20,7 @@ try:
 except Exception:
     captcha_solver = None
 
-VERSION = "2.9.3"
+VERSION = "2.9.4"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"

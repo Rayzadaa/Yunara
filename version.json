@@ -1,7 +1,7 @@
 {
-  "version": "2.9.3",
+  "version": "2.9.4",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "57e89fab929848f850adb1bfdd43b5e8ac28a92e8192eae8320051451faf0158",
-  "signature": "c4624b1c751d69d9d5be2f43bcc5657b252444a4e9db64c696482d4fa830e0a2bd5624fff8eaeec14ce84d16746920e5584fd3d60002b6879955a0bda9ecd502",
-  "notes": "Maintenance: point the in-app updater at the renamed repository so auto-updates keep working."
+  "sha256": "f059350dde53158768b11e8291be29aa8f41cecbaa9f03f98b301f4b77e601bc",
+  "signature": "5a80d0f37491489d156dae4193a47266cb1b08013da351e98120db2dc2a9d975afef9013ecbdc2b6c2e599825698e5f8d4a9926edc2d209937023f6a5094c205",
+  "notes": "Security: the updater now fails closed (a valid sha256 + Ed25519 signature are mandatory), and 2captcha calls use HTTPS."
 }

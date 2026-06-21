@@ -21,7 +21,7 @@ def available():
 
 def _solve_recaptcha(sitekey, page_url, log):
     try:
-        r = requests.post("http://2captcha.com/in.php", data={
+        r = requests.post("https://2captcha.com/in.php", data={
             "key": CAPTCHA_API_KEY, "method": "userrecaptcha",
             "googlekey": sitekey, "pageurl": page_url, "json": 1,
         }, timeout=20)
@@ -30,7 +30,7 @@ def _solve_recaptcha(sitekey, page_url, log):
             return None
         for _ in range(24):  # up to ~2 min
             time.sleep(5)
-            rr = requests.get("http://2captcha.com/res.php", params={
+            rr = requests.get("https://2captcha.com/res.php", params={
                 "key": CAPTCHA_API_KEY, "action": "get", "id": rid, "json": 1,
             }, timeout=20).json()
             if rr.get("status") == 1:
