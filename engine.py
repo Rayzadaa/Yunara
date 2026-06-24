@@ -5,6 +5,7 @@ Each task runs in its own thread with its own Playwright browser context
 and proxied checkout both work.
 """
 import hashlib
+import math
 import os
 import random
 import re
@@ -24,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.7"
+VERSION = "2.9.8"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -148,6 +149,31 @@ def human_pause(min_s=0.3, max_s=0.7):
     time.sleep(random.uniform(min_s, max_s))
 
 
+def maybe_pause(turbo, min_s=0.3, max_s=0.7):
+    """Anti-detection pause, trimmed to near-zero in Turbo mode (faster checkout
+    at a slightly higher detection risk)."""
+    time.sleep(random.uniform(0.04, 0.12) if turbo else random.uniform(min_s, max_s))
+
+
+class _Blocker:
+    """Toggleable image/media/font blocker for a Playwright context — speeds up
+    monitoring page loads. Disabled on the fly when a CAPTCHA appears so the
+    puzzle image still renders."""
+    def __init__(self, enabled=True):
+        self.enabled = enabled
+
+    def route(self, route):
+        try:
+            if self.enabled and route.request.resource_type in _BLOCK_TYPES:
+                return route.abort()
+        except Exception:
+            pass
+        try:
+            return route.continue_()
+        except Exception:
+            pass
+
+
 # ─── CAPTCHA (incl. slider auto-attempt) ──────────────────────────
 
 def check_for_captcha(page):
@@ -165,33 +191,59 @@ def check_for_captcha(page):
 
 
 def _try_slider(page, log):
-    """Best-effort drag of the Lazada slider handle. Often blocked by trajectory
-    checks, but worth a shot before falling back to manual."""
+    """Best-effort human-like drag of the Lazada slider handle: eased velocity
+    (slow → fast → slow) with vertical micro-jitter and a small overshoot+settle,
+    which clears the trajectory check more often than a linear drag. Distance is
+    read from the track when possible. Still frequently blocked — manual is the
+    fallback."""
     for sel in SEL["slider_handle"]:
         handle = page.query_selector(sel)
-        if handle and handle.is_visible():
-            try:
-                box = handle.bounding_box()
-                if not box:
-                    continue
-                page.mouse.move(box["x"] + 5, box["y"] + box["height"] / 2)
-                page.mouse.down()
-                steps = random.randint(20, 30)
-                for i in range(steps):
-                    page.mouse.move(box["x"] + 5 + (i + 1) * 12 + random.uniform(-2, 2),
-                                    box["y"] + box["height"] / 2 + random.uniform(-2, 2))
-                    time.sleep(random.uniform(0.005, 0.02))
-                page.mouse.up()
-                log("attempted slider drag")
-                time.sleep(2)
-                return not check_for_captcha(page)
-            except Exception as e:
-                log(f"slider drag error: {e}")
+        if not (handle and handle.is_visible()):
+            continue
+        try:
+            box = handle.bounding_box()
+            if not box:
+                continue
+            # How far to drag — the track width if we can read it, else a default.
+            distance = 300.0
+            for tsel in SEL["slider_track"]:
+                t = page.query_selector(tsel)
+                tb = t.bounding_box() if t else None
+                if tb and tb["width"] > 40:
+                    distance = tb["width"] - box["width"] - 4
+                    break
+            start_x = box["x"] + box["width"] / 2
+            cy = box["y"] + box["height"] / 2
+            page.mouse.move(start_x, cy)
+            page.mouse.down()
+            steps = random.randint(28, 40)
+            for i in range(1, steps + 1):
+                t = i / steps
+                eased = 3 * t * t - 2 * t * t * t  # smoothstep: slow start/end, fast middle
+                x = start_x + distance * eased + random.uniform(-1.2, 1.2)
+                y = cy + math.sin(t * math.pi) * random.uniform(-2.5, 2.5)
+                page.mouse.move(x, y)
+                edge = 1.7 if (t < 0.15 or t > 0.85) else 1.0  # dwell at the ends
+                time.sleep(random.uniform(0.006, 0.02) * edge)
+            page.mouse.move(start_x + distance + random.uniform(2, 6), cy)  # overshoot
+            time.sleep(random.uniform(0.03, 0.06))
+            page.mouse.move(start_x + distance, cy)  # settle back
+            page.mouse.up()
+            log("attempted slider drag (human curve)")
+            time.sleep(2)
+            return not check_for_captcha(page)
+        except Exception as e:
+            log(f"slider drag error: {e}")
     return False
 
 
 def handle_captcha(page, log):
-    """Try slider drag, then external solver. Returns True if cleared."""
+    """Try slider drag, then external solver. Returns True if cleared. Also brings
+    the window to the front so a manual solve is one click away."""
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
     if _try_slider(page, log):
         return True
     if captcha_solver and captcha_solver.available():
@@ -285,7 +337,7 @@ def select_variant(page, variant, log):
         return False
 
 
-def select_payment(page, payment, log):
+def select_payment(page, payment, log, turbo=False):
     if not payment:
         return True
     try:
@@ -324,7 +376,7 @@ def select_payment(page, payment, log):
                 page.evaluate(
                     "(el) => { const c = el.closest('label, [role=\"radio\"], li, div') || el; c.click(); }", h)
         log(f"selected payment: {payment}")
-        human_pause(0.6, 1.2)
+        maybe_pause(turbo, 0.6, 1.2)
         return True
     except Exception as e:
         log(f"payment {payment!r} not selectable ({e}) — using pre-selected method")
@@ -505,7 +557,7 @@ def _click_confirm(page, log):
     return False
 
 
-def complete_checkout(page, name, url, max_price, payment, dry_run, log):
+def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=False):
     try:
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -526,10 +578,11 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log):
                 return "retry"
 
         safe = "".join(c if c.isalnum() else "_" for c in name)[:30]
-        try:
-            page.screenshot(path=os.path.join(HERE, f"checkout_{safe}.png"))
-        except Exception:
-            pass
+        if not turbo:  # debug screenshot — skipped in Turbo to save time
+            try:
+                page.screenshot(path=os.path.join(HERE, f"checkout_{safe}.png"))
+            except Exception:
+                pass
         log(f"checkout page url: {page.url}")
         body = page.inner_text("body").lower()
 
@@ -547,7 +600,7 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log):
                 return "stop"
 
         if payment:
-            select_payment(page, payment, log)
+            select_payment(page, payment, log, turbo)
 
         place = page.get_by_text(SEL["place_order_text"], exact=False).first
         try:
@@ -578,13 +631,14 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log):
             if h:
                 page.evaluate("(el) => el.click()", h)
 
-        human_pause(0.6, 1.0)
+        maybe_pause(turbo, 0.6, 1.0)
 
         # Capture + click any post-Place-Order confirmation dialog.
-        try:
-            page.screenshot(path=os.path.join(HERE, f"checkout_{safe}_confirm.png"))
-        except Exception:
-            pass
+        if not turbo:  # debug screenshot — skipped in Turbo
+            try:
+                page.screenshot(path=os.path.join(HERE, f"checkout_{safe}_confirm.png"))
+            except Exception:
+                pass
         _click_confirm(page, log)
 
         # Poll fast for the outcome — instant thank-you, a new payment tab (PayNow),
@@ -918,6 +972,7 @@ class TaskWorker(threading.Thread):
         max_price = float(self.task.get("max_price") or 0)
         payment = (self.task.get("payment") or "").strip()
         fast = bool(self.task.get("fast"))
+        turbo = bool(self.task.get("turbo"))
         self._account = account
 
         watchlist = [u.strip() for u in (self.task.get("watchlist") or []) if u.strip()]
@@ -956,6 +1011,12 @@ class TaskWorker(threading.Thread):
                 with sync_playwright() as p:
                     browser, context = _new_context(p, proxy, session_file)
                     page = context.new_page()
+                    blocker = _Blocker(enabled=turbo)
+                    if turbo:  # block images/media while monitoring to speed page loads
+                        try:
+                            context.route("**/*", blocker.route)
+                        except Exception:
+                            pass
                     rebuild = False
                     try:
                         while not self._stop.is_set() and not self.purchased:
@@ -971,9 +1032,15 @@ class TaskWorker(threading.Thread):
                             result, buy_btn = check_stock(page, url, variant, self.log)
 
                             if result == "captcha":
+                                if blocker.enabled:  # let the puzzle image load
+                                    blocker.enabled = False
+                                    try:
+                                        page.reload(wait_until="domcontentloaded", timeout=20000)
+                                    except Exception:
+                                        pass
                                 self.status("CAPTCHA — solve in window")
                                 notify(f"⚠️ *CAPTCHA* on *{name}* — solve it in the browser window.")
-                                handle_captcha(page, self.log)  # best-effort auto-solve
+                                handle_captcha(page, self.log)  # best-effort auto-solve + window focus
                                 # Watch the page; resume the moment it's cleared (auto or manual).
                                 solved = False
                                 waited = 0
@@ -982,6 +1049,7 @@ class TaskWorker(threading.Thread):
                                         solved = True
                                         break
                                     time.sleep(2); waited += 2
+                                blocker.enabled = turbo  # restore blocking for monitoring
                                 if solved:
                                     self.log("CAPTCHA cleared — resuming")
                                     self.status("resuming")
@@ -1021,16 +1089,16 @@ class TaskWorker(threading.Thread):
                                     self.log("Buy Now missing despite stock")
                                     self._wait(interval); continue
                                 set_quantity(page, qty, self.log)
-                                human_pause(0.5, 1.0)
+                                maybe_pause(turbo, 0.5, 1.0)
                                 try:
                                     buy_btn.click()
                                 except Exception as e:
                                     self.log(f"buy click failed: {e}")
                                     self._wait(interval); continue
-                                human_pause(0.8, 1.5)
+                                maybe_pause(turbo, 0.8, 1.5)
 
                                 self.status("checking out")
-                                outcome = complete_checkout(page, name, url, max_price, payment, dry_run, self.log)
+                                outcome = complete_checkout(page, name, url, max_price, payment, dry_run, self.log, turbo)
                                 if outcome in ("ok", "pending"):
                                     self.purchased = True
                                     self.status("purchased ✓" if outcome == "ok"

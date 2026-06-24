@@ -1,7 +1,7 @@
 {
-  "version": "2.9.7",
+  "version": "2.9.8",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "0cb1e9d7fb9ca9e55199b4cf3a7f3ac82f55549689357977ec6d8f0b719cf567",
-  "signature": "c4dd1de01f337c52d8d33d78e7bdb5b2cee981d4c7d561c53e20f6b8c657ec48340a3977842aaf48f8b69a3a93d0a11e61fdca2ad43c832a14940f4bd44ef205",
-  "notes": "UI fix: status pills are delegate-painted so the column resizes on every change \u2014 longer statuses (scheduled 13:00, etc.) no longer clip."
+  "sha256": "f6b72871d0facf898e43269ceabe4f858939a1c70fb6184f2a76abe03c3f1df4",
+  "signature": "bd65f8b17fe28e054f62fd7bdaa040e73a612b60add0f3cc30c9076ca5d9555284d736b16413ef36bdab38936fa2e2ee1949f97ca96cd740664722769ca9290a",
+  "notes": "Turbo mode (block images while monitoring + trim checkout delays for a faster buy), plus a more human-like CAPTCHA slider attempt and auto window-focus for manual solving."
 }

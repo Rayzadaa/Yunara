@@ -204,6 +204,8 @@ class TaskDialog(QDialog):
         self.alert_only = QCheckBox("Alert only (notify, don't buy)"); self.alert_only.setChecked(bool(t.get("alert_only")))
         self.dry_run = QCheckBox("Dry run (stop at Place Order, don't click)"); self.dry_run.setChecked(bool(t.get("dry_run")))
         self.fast = QCheckBox("Fast monitor (lightweight pre-check)"); self.fast.setChecked(bool(t.get("fast")))
+        self.turbo = QCheckBox("⚡ Turbo mode (block images while monitoring + trim checkout delays — faster, slightly higher detection risk)")
+        self.turbo.setChecked(bool(t.get("turbo")))
 
         form.addRow("Name", self.name)
         form.addRow("Product URL", self.url)
@@ -220,6 +222,7 @@ class TaskDialog(QDialog):
         form.addRow("", self.alert_only)
         form.addRow("", self.dry_run)
         form.addRow("", self.fast)
+        form.addRow("", self.turbo)
 
         row = QHBoxLayout()
         ok = QPushButton("Save"); cancel = QPushButton("Cancel")
@@ -238,7 +241,7 @@ class TaskDialog(QDialog):
             "payment": self.payment.currentText().strip(),
             "proxies": [ln.strip() for ln in self.proxy.toPlainText().splitlines() if ln.strip()],
             "alert_only": self.alert_only.isChecked(), "dry_run": self.dry_run.isChecked(),
-            "fast": self.fast.isChecked(),
+            "fast": self.fast.isChecked(), "turbo": self.turbo.isChecked(),
         }
 
 
@@ -634,6 +637,8 @@ class MainWindow(QMainWindow):
         m = "alert" if t.get("alert_only") else ("dry" if t.get("dry_run") else "buy")
         if t.get("fast"):
             m += "·fast"
+        if t.get("turbo"):
+            m += "·turbo"
         return m
 
     def _cell(self, text, editable=False):

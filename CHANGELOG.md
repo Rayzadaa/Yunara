@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.9.8 — faster checkout + better CAPTCHA handling
+- **Turbo mode** (per-task option): blocks images/media while monitoring for quicker
+  page loads, and trims the anti-detection delays + skips debug screenshots during
+  checkout — roughly 2–4s faster per buy. Opt-in (slightly higher detection risk);
+  image-blocking auto-disables if a CAPTCHA appears so the puzzle still renders.
+- **Better CAPTCHA handling:** more human-like slider drag (eased speed + small
+  overshoot, distance read from the track) clears it a bit more often, and the
+  browser window is now brought to the front automatically so a manual solve is one
+  click away. (Note: Lazada's slider still isn't reliably auto-solvable — avoidance
+  via a warm session + real IP remains the best bet.)
+
 ## v2.9.7 — status pill clipping fixed properly
 - Status pills are now painted by a delegate on real item data, so the column
   resizes correctly on every status change — longer statuses like "scheduled 13:00"
