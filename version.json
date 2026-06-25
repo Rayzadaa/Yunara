@@ -1,7 +1,7 @@
 {
-  "version": "2.9.10",
+  "version": "2.9.11",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "5e1e76e8836fbe2d727a4e694e7400f33e13ae313589fb6247c1f17e2f1f27df",
-  "signature": "b397f5bdf88263727b71d4792c2519e47b5ed284d9536e1c515b70f97ae567552073d7c6759c2bac12c2e3557445c260a4877be3cf7b7fa82934bd0724941f0a",
-  "notes": "Bugfix: Turbo mode no longer blocks images during checkout, so the PayNow QR and payment icons load correctly. Image blocking is now monitoring-only."
+  "sha256": "3d022c3e067e678ba63562c7989e707a89be834d4130db7090f6a12616dbda1f",
+  "signature": "a13812c0fb674f01b3ecbc67547c32bb79dc2fe3f5abb89b69bd34dfdf7ea779203f9bff5f61481769f5635c29c4455348ca082f4c6694b1044800e93fae4107",
+  "notes": "Quantity is now typed directly into the qty box (faster for qty>1, with + button fallback), and sessions that can't be decrypted here (e.g. copied from another PC) are ignored cleanly so you just log in fresh."
 }

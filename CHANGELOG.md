@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.9.11 — type the quantity + sturdier sessions
+- **Quantity is now typed directly into the qty box** instead of clicking "+" repeatedly
+  — faster and more reliable for quantities above 1 (it still falls back to the "+"
+  button if the field can't be typed into).
+- **Sturdier session handling:** a session file that can't be read here — e.g. one copied
+  from another PC or Windows user, which by design won't decrypt — is now ignored cleanly
+  so you simply log in fresh, instead of getting stuck.
+
 ## v2.9.10 — fix: Turbo blocked the PayNow QR
 - **Bugfix:** in Turbo mode the image blocker stayed on during checkout, so the
   PayNow **QR code** (and the payment-method icons) didn't load — leaving checkout

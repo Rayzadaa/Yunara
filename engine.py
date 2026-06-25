@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.10"
+VERSION = "2.9.11"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -81,12 +81,18 @@ def session_path(account="", proxy_raw=""):
 
 def _load_session_arg(session_file):
     """Value for new_context's storage_state: a decrypted dict (sealed or legacy,
-    via secure_store) or the raw path (fallback). None if no usable session."""
+    via secure_store) or the raw path (fallback). None when there's no usable
+    session — INCLUDING one sealed on a different PC / Windows user, which by
+    design won't decrypt here. In that case we ignore it cleanly so the user just
+    logs in fresh (rather than getting stuck on a foreign/corrupt session)."""
     if not session_file or not os.path.exists(session_file):
         return None
-    if secure_store:
-        return secure_store.load(session_file)  # dict, or None if unreadable
-    return session_file  # fallback: let Playwright read the plaintext file
+    if not secure_store:
+        return session_file  # fallback: let Playwright read the plaintext file
+    state = secure_store.load(session_file)
+    if isinstance(state, dict) and isinstance(state.get("cookies"), list):
+        return state
+    return None  # unreadable / foreign session — fall through to a clean login
 
 
 def _save_session(context, session_file):
@@ -521,9 +527,62 @@ def http_stock(url):
 def set_quantity(page, quantity, log):
     if quantity <= 1:
         return
+    qty = str(quantity)
+
+    # Primary: type the value straight into the qty input. The input is found
+    # relative to the "+" icon so it survives class changes. After typing we
+    # verify; if a React-controlled input didn't commit the typed value, force it
+    # via the native value setter + input/change events.
+    inp = None
+    try:
+        inp = page.evaluate_handle(
+            """() => {
+                const add = document.querySelector('i.next-icon-add');
+                const scope = add ? add.closest(
+                    '.next-number-picker, .next-input-group, .pdp-mod-quantity, .quantity-content, .sku-quantity') : null;
+                return (scope && scope.querySelector('input')) ||
+                       document.querySelector('.next-number-picker input, .next-input-group input');
+            }""").as_element()
+    except Exception:
+        inp = None
+
+    if inp:
+        try:
+            inp.click()
+            try:
+                inp.fill("")  # clear existing value
+            except Exception:
+                page.keyboard.press("Control+A")
+            inp.type(qty, delay=60)
+            try:
+                page.keyboard.press("Tab")  # blur to commit
+            except Exception:
+                pass
+            human_pause(0.2, 0.4)
+            cur = ""
+            try:
+                cur = (inp.input_value() or "").strip()
+            except Exception:
+                cur = ""
+            if cur != qty:  # didn't stick — force the controlled input to update
+                page.evaluate(
+                    """(args) => { const [el, q] = args;
+                        const setter = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value').set;
+                        setter.call(el, String(q));
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                    }""", [inp, quantity])
+                human_pause(0.1, 0.3)
+            log(f"set quantity to {quantity} (typed into qty input)")
+            return
+        except Exception as e:
+            log(f"qty type failed ({e}) — falling back to + button")
+
+    # Fallback: click the "+" button (quantity - 1) times.
     plus = page.query_selector(SEL["qty_plus"])
     if not plus:
-        log("+ button not found — buying quantity 1")
+        log("qty input + button not found — buying quantity 1")
         return
     for _ in range(quantity - 1):
         try:
