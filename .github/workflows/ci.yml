@@ -7,14 +7,20 @@ on:
     branches: [ main ]
 
 jobs:
-  compile:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install test deps
+        run: pip install pytest playwright==1.60.0 requests==2.34.2 cryptography==49.0.0
       - name: Byte-compile all modules (syntax check)
-        run: python -m compileall -q engine.py gui_app.py notifier.py captcha_solver.py updater.py
+        run: python -m compileall -q engine.py gui_app.py notifier.py captcha_solver.py updater.py secure_store.py desktop_alert.py
       - name: Validate version.json
         run: python -c "import json; json.load(open('version.json')); print('version.json OK')"
+      - name: Run unit tests
+        run: pytest -q
+      - name: Dependency vulnerability audit (advisory, non-blocking)
+        run: pip install pip-audit && pip-audit -r requirements.txt || true

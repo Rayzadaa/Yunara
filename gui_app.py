@@ -29,6 +29,10 @@ try:
     import desktop_alert
 except Exception:  # update transition: module may be absent on first launch
     desktop_alert = None
+try:
+    import secure_store
+except Exception:
+    secure_store = None
 import engine
 import notifier
 import updater
@@ -296,14 +300,17 @@ class AccountsDialog(QDialog):
 
 
 class WebhookDialog(QDialog):
-    def __init__(self, parent, url, role):
+    def __init__(self, parent, url, role, health_url=""):
         super().__init__(parent)
-        self.setWindowTitle("Discord notifications"); self.resize(600, 0)
+        self.setWindowTitle("Discord notifications"); self.resize(620, 0)
         form = QFormLayout(self)
         form.addRow(QLabel("Channel → Edit → Integrations → Webhooks → New Webhook → Copy URL"))
         self.url = QLineEdit(url); self.url.setPlaceholderText("https://discord.com/api/webhooks/...")
         self.role = QLineEdit(role); self.role.setPlaceholderText("optional USER or ROLE ID to @ping on stock/order")
         form.addRow("Webhook URL", self.url); form.addRow("Ping user/role ID", self.role)
+        self.health = QLineEdit(health_url)
+        self.health.setPlaceholderText("optional product URL — checked on startup; alerts if Lazada's layout changed")
+        form.addRow("Selector health URL", self.health)
         row = QHBoxLayout()
         test = QPushButton("Send test"); test.clicked.connect(self._test)
         ok = QPushButton("Save"); cancel = QPushButton("Cancel")
@@ -322,7 +329,7 @@ class WebhookDialog(QDialog):
         QMessageBox.information(self, "Test", "Sent — check Discord." if ok else "Failed — check the URL.")
 
     def get(self):
-        return self.url.text().strip(), self.role.text().strip()
+        return self.url.text().strip(), self.role.text().strip(), self.health.text().strip()
 
 
 class ChangelogDialog(QDialog):
@@ -431,7 +438,7 @@ class MainWindow(QMainWindow):
         self.tasks = []; self.proxies = []; self.accounts = []
         self.workers = {}
         self.logged_in = False
-        self.webhook_url = ""; self.role_id = ""
+        self.webhook_url = ""; self.role_id = ""; self.health_url = ""
         self.otp_queue = queue.Queue()
         self._login_busy = False
         self._refreshing = False
@@ -451,6 +458,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._load()
         threading.Thread(target=self._check_updates_bg, args=(False,), daemon=True).start()
+        if (self.health_url or "").strip():
+            threading.Thread(target=self._selector_health_bg, daemon=True).start()
 
     def _build_ui(self):
         # System-tray icon — used for desktop notification toasts.
@@ -603,10 +612,31 @@ class MainWindow(QMainWindow):
         self.chip_err.setText(f"⚠ {errors} error(s)")
 
     # ---- persistence ----
-    def _load(self):
-        if os.path.exists(DATA_FILE):
-            try:
+    def _read_data(self):
+        """Load bot_data.json — DPAPI-sealed via secure_store, transparently
+        reading a legacy plaintext file. Returns {} if absent, or None if a file
+        exists but can't be read (e.g. sealed on another PC)."""
+        if not os.path.exists(DATA_FILE):
+            return {}
+        try:
+            if secure_store:
+                data = secure_store.load(DATA_FILE)
+            else:
                 data = json.load(open(DATA_FILE, encoding="utf-8"))
+        except Exception:
+            data = None
+        return data if isinstance(data, dict) else None
+
+    def _load(self):
+        data = self._read_data()
+        if data is None:  # file exists but unreadable — don't silently wipe it
+            QMessageBox.warning(self, "Settings unreadable",
+                                "bot_data.json couldn't be read (was it copied from another PC, "
+                                "where it was encrypted?). Starting with empty settings; saving "
+                                "will overwrite it.")
+            data = {}
+        if data:
+            try:
                 self.tasks = data.get("tasks", [])
                 for t in self.tasks:  # migrate old single proxy -> list
                     if "proxies" not in t:
@@ -614,6 +644,7 @@ class MainWindow(QMainWindow):
                 self.proxies = data.get("proxies", [])
                 self.accounts = data.get("accounts", [])
                 self.webhook_url = data.get("webhook", ""); self.role_id = data.get("role", "")
+                self.health_url = data.get("health_url", "")
                 notifier.set_webhook(self.webhook_url); notifier.set_role(self.role_id)
                 self.desktop_alerts = data.get("desktop_alerts", True)
                 self.alert_sound = data.get("alert_sound", True)
@@ -628,10 +659,15 @@ class MainWindow(QMainWindow):
         self._refresh_table()
 
     def _save(self):
-        json.dump({"tasks": self.tasks, "proxies": self.proxies, "accounts": self.accounts,
-                   "webhook": self.webhook_url, "role": self.role_id,
-                   "desktop_alerts": self.desktop_alerts, "alert_sound": self.alert_sound},
-                  open(DATA_FILE, "w", encoding="utf-8"), indent=2)
+        data = {"tasks": self.tasks, "proxies": self.proxies, "accounts": self.accounts,
+                "webhook": self.webhook_url, "role": self.role_id, "health_url": self.health_url,
+                "desktop_alerts": self.desktop_alerts, "alert_sound": self.alert_sound}
+        # DPAPI-seal at rest (webhook URL / tasks), transparently. Falls back to
+        # plaintext if secure_store is unavailable so saving never fails.
+        if secure_store:
+            secure_store.save(DATA_FILE, data)
+        else:
+            json.dump(data, open(DATA_FILE, "w", encoding="utf-8"), indent=2)
 
     def _mode(self, t):
         m = "alert" if t.get("alert_only") else ("dry" if t.get("dry_run") else "buy")
@@ -797,6 +833,23 @@ class MainWindow(QMainWindow):
     def show_orders(self):
         OrdersDialog(self).exec()
 
+    def _selector_health_bg(self):
+        """Startup check that Lazada's key selectors still resolve; alert if not."""
+        url = (self.health_url or "").strip()
+        if not url:
+            return
+        ok, missing = engine.selector_health(url, lambda m: self.bridge.log.emit("health", m))
+        if ok:
+            self.bridge.log.emit("health", "selector health OK ✓")
+            return
+        msg = "Lazada selectors changed — the bot may fail to buy: " + ", ".join(missing)
+        self.bridge.log.emit("health", "⚠️ " + msg)
+        try:
+            notifier.send_event("⚠️ Selector health check FAILED", description=msg,
+                                color=0xE74C3C, ping=True)
+        except Exception:
+            pass
+
     def _set_row_button(self, name, start):
         r = self._row_of(name)
         if r is None:
@@ -951,11 +1004,13 @@ class MainWindow(QMainWindow):
         threading.Thread(target=run, daemon=True).start()
 
     def manage_webhook(self):
-        dlg = WebhookDialog(self, self.webhook_url, self.role_id)
+        dlg = WebhookDialog(self, self.webhook_url, self.role_id, self.health_url)
         if dlg.exec():
-            self.webhook_url, self.role_id = dlg.get()
+            self.webhook_url, self.role_id, self.health_url = dlg.get()
             notifier.set_webhook(self.webhook_url); notifier.set_role(self.role_id)
             self._save(); self.log_line("discord", "settings saved")
+            if self.health_url:  # run the health check now so the user gets feedback
+                threading.Thread(target=self._selector_health_bg, daemon=True).start()
 
     def run_self_test(self):
         name = self._selected_name()
@@ -1057,7 +1112,20 @@ class MainWindow(QMainWindow):
         self.stop_all(); self._save(); event.accept()
 
 
+def _cap_log():
+    """Keep bot.log bounded — on startup, if it's over ~2 MB, keep the last 2000 lines."""
+    try:
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 2_000_000:
+            with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            with open(LOG_FILE, "w", encoding="utf-8") as f:
+                f.writelines(lines[-2000:])
+    except Exception:
+        pass
+
+
 def main():
+    _cap_log()
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_QSS)
     w = MainWindow(); w.show()

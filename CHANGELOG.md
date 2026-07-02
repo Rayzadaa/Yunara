@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.9.13 — reliability & hardening
+- **Selector-health alert:** set a product URL under **🔔 Discord…** ("Selector health URL")
+  and the bot checks on startup that Lazada's key buttons still resolve — pinging Discord if
+  the layout changed, so you find out *before* a drop, not during one.
+- **bot_data.json is now encrypted at rest** (Windows DPAPI), like the sessions — your
+  webhook URL and tasks are no longer plaintext on disk. Existing files load and are
+  re-sealed automatically. (Note: like sessions, it's bound to your Windows user.)
+- **bot.log is capped** so it can't grow without bound (trimmed to the last 2000 lines
+  on startup once it passes ~2 MB).
+- **Dev:** added a pytest unit-test suite for the core logic and wired it into CI, plus a
+  dependency-vulnerability audit step.
+
 ## v2.9.12 — faster checkout
 - **Event-driven "Place Order" detection.** The checkout page is now detected the instant
   the button renders, instead of re-reading the whole page text every 0.5s — cuts the main

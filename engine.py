@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.12"
+VERSION = "2.9.13"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -1389,3 +1389,33 @@ def self_test(url, log):
     for line in report:
         log("self-test: " + line)
     return report
+
+
+def selector_health(url, log):
+    """Headless check that Lazada's critical PDP selectors still resolve — an
+    early-warning that Lazada changed their layout and the bot may need updating.
+    Returns (ok, missing). On any error returns (True, []) so we never false-alarm."""
+    critical = {"buy/cart button": SEL["buy_cart_btns"], "sku selector": SEL["sku_selector"]}
+    missing = []
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                channel=CHROME_CHANNEL, headless=True,
+                args=["--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"])
+            ctx = browser.new_context(locale="en-SG", user_agent=_HTTP_HEADERS["User-Agent"])
+            try:
+                page = ctx.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(2500)
+                if check_for_captcha(page):
+                    log("selector health: CAPTCHA/punish page — inconclusive")
+                    return (True, [])
+                for label, sel in critical.items():
+                    if page.query_selector(sel) is None:
+                        missing.append(label)
+            finally:
+                browser.close()
+    except Exception as e:
+        log(f"selector health check error: {e}")
+        return (True, [])
+    return (len(missing) == 0, missing)
