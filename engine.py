@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.11"
+VERSION = "2.9.12"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -318,7 +318,7 @@ def fast_check(context, url, log):
         return "unknown"
 
 
-def select_variant(page, variant, log):
+def select_variant(page, variant, log, turbo=False):
     if not variant:
         return True
     try:
@@ -336,7 +336,7 @@ def select_variant(page, variant, log):
             handle,
         )
         log(f"selected variant: {variant}")
-        human_pause(0.6, 1.0)
+        maybe_pause(turbo, 0.6, 1.0)
         return True
     except Exception as e:
         log(f"could not select variant {variant!r}: {e}")
@@ -363,7 +363,7 @@ def select_payment(page, payment, log, turbo=False):
                     if el.count() > 0 and el.is_visible():
                         el.click(timeout=2500)
                         log(f"expanded '{label}'")
-                        human_pause(1.0, 1.8)
+                        maybe_pause(turbo, 1.0, 1.8)
                         break
                 except Exception:
                     pass
@@ -389,16 +389,16 @@ def select_payment(page, payment, log, turbo=False):
         return False
 
 
-def check_stock(page, url, variant, log):
+def check_stock(page, url, variant, log, turbo=False):
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         try:
             page.wait_for_selector(SEL["buy_cart_btns"], timeout=8000)
         except Exception:
             pass
-        human_pause()
+        maybe_pause(turbo)
         if variant:
-            select_variant(page, variant, log)
+            select_variant(page, variant, log, turbo)
         if check_for_captcha(page):
             return ("captcha", None)
         buttons = page.query_selector_all(SEL["buy_cart_btns"])
@@ -617,20 +617,21 @@ def _click_confirm(page, log):
 
 
 def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=False):
+    t0 = time.time()
     try:
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
         except Exception:
             pass
-        deadline = time.time() + 12
-        while time.time() < deadline:
-            try:
-                probe = page.inner_text("body").lower()
-            except Exception:
-                probe = ""
-            if "place order" in probe or "lazada wallet" in probe:
-                break
-            time.sleep(0.5)
+        # Wait for the checkout to be actionable — event-driven (fires the instant
+        # the button/label renders) instead of serializing the whole page body
+        # every 0.5s, which was the main source of checkout latency.
+        try:
+            page.get_by_text(re.compile(r"Place Order|Lazada Wallet", re.I)).first.wait_for(
+                state="visible", timeout=12000)
+        except Exception:
+            pass
+        log(f"⏱ checkout ready {time.time() - t0:.1f}s")
 
         if check_for_captcha(page):
             if not handle_captcha(page, log):
@@ -691,6 +692,7 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
                 page.evaluate("(el) => el.click()", h)
 
         maybe_pause(turbo, 0.6, 1.0)
+        log(f"⏱ order submitted {time.time() - t0:.1f}s")
 
         # Capture + click any post-Place-Order confirmation dialog.
         if not turbo:  # debug screenshot — skipped in Turbo
@@ -725,7 +727,8 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
                 snap = ""
             if any(k in snap for k in keys):
                 break
-            time.sleep(0.5)
+            time.sleep(0.25)
+        log(f"⏱ outcome {time.time() - t0:.1f}s")
 
         target.wait_for_timeout(600)
         if check_for_captcha(target):
@@ -1089,7 +1092,7 @@ class TaskWorker(threading.Thread):
 
                             blocker.enabled = turbo  # block images only while monitoring
                             self.status("checking")
-                            result, buy_btn = check_stock(page, url, variant, self.log)
+                            result, buy_btn = check_stock(page, url, variant, self.log, turbo)
 
                             if result == "captcha":
                                 if blocker.enabled:  # let the puzzle image load

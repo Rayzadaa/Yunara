@@ -1,7 +1,7 @@
 {
-  "version": "2.9.11",
+  "version": "2.9.12",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "3d022c3e067e678ba63562c7989e707a89be834d4130db7090f6a12616dbda1f",
-  "signature": "a13812c0fb674f01b3ecbc67547c32bb79dc2fe3f5abb89b69bd34dfdf7ea779203f9bff5f61481769f5635c29c4455348ca082f4c6694b1044800e93fae4107",
-  "notes": "Quantity is now typed directly into the qty box (faster for qty>1, with + button fallback), and sessions that can't be decrypted here (e.g. copied from another PC) are ignored cleanly so you just log in fresh."
+  "sha256": "9bbf2d721cae749cc9bce41d92e1d02b7021f5fec1c516adbe3a35e12f307ddc",
+  "signature": "c6bd4ea51f18f102817437bddb8f34a66099220e23258f549277232f7ceff52aaa39f161643d2c4c72df3b39b05f42190d44e752a61113a549ed7c8b67898c09",
+  "notes": "Faster checkout: event-driven Place Order detection, Turbo trims the last fixed delays (~2.5s more shaved), and per-stage timing logs so you can see where checkout time goes."
 }

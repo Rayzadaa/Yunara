@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.9.12 — faster checkout
+- **Event-driven "Place Order" detection.** The checkout page is now detected the instant
+  the button renders, instead of re-reading the whole page text every 0.5s — cuts the main
+  source of checkout latency.
+- **Turbo now trims the last fixed delays** it was missing (variant select, stock settle,
+  payment-list expand), shaving ~2.5s more off a Turbo checkout. On the fixed anti-detection
+  delays alone, Turbo is ~5.7s faster than normal mode.
+- **⏱ Timing logs** — the Log pane now shows how long each checkout stage took
+  (`checkout ready`, `order submitted`, `outcome`), so you can see exactly where the time goes.
+
 ## v2.9.11 — type the quantity + sturdier sessions
 - **Quantity is now typed directly into the qty box** instead of clicking "+" repeatedly
   — faster and more reliable for quantities above 1 (it still falls back to the "+"
