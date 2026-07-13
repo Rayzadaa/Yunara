@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.13"
+VERSION = "2.9.14"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -651,9 +651,14 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
             log("item unavailable at checkout (sold out during buy) — back to monitoring")
             return "unavailable"
 
+        # Capture the order total from the checkout page — used as a fallback amount
+        # for the PayNow/reserved path, whose confirmation page often doesn't show
+        # the price as plain text.
+        _ct = re.findall(r"\$?\s*([\d,]+\.\d{2})", body)
+        checkout_total = ("$" + max(_ct, key=lambda x: float(x.replace(",", "")))) if _ct else ""
+
         if max_price and max_price > 0:
-            nums = [float(x.replace(",", "")) for x in re.findall(r"\$?\s*([\d,]+\.\d{2})", body)]
-            total = max(nums) if nums else 0
+            total = max((float(x.replace(",", "")) for x in _ct), default=0)
             if total and total > max_price:
                 log(f"ABORT: total {total} exceeds max price {max_price}")
                 notify(f"⛔ *{name}* aborted — total ${total} over max ${max_price}")
@@ -784,8 +789,8 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
                            "complete the payment", "pay within", "payment reference", "reference no",
                            "awaiting payment", "pending payment", "order has been placed", "transfer to"]
         if any(s in post for s in pending_signals) or "payment" in post_url or "cashier" in post_url:
-            amount = _extract_amount(post)
-            log(f"ORDER RESERVED — pending PayNow/manual payment (amount {amount})")
+            amount = _extract_amount(post) or checkout_total
+            log(f"ORDER RESERVED — pending PayNow/manual payment (amount {amount or '?'})")
             notifier.send_event("⏰ ORDER RESERVED — PAY WITHIN ~30 MIN",
                                 description=f"{name}\nComplete the *PayNow / bank transfer* now — the order is held "
                                             "only ~30 minutes, then it's cancelled.",
@@ -812,7 +817,9 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
 
 
 def _extract_amount(text):
-    nums = re.findall(r"\$\s*([\d,]+\.\d{2})", text or "")
+    # Match $, S$, or SGD prefixes (the PayNow reserve page shows "SGD 8.29",
+    # not "$8.29", which the old $-only regex missed).
+    nums = re.findall(r"(?:S?\$|SGD)\s*([\d,]+\.\d{2})", text or "", re.I)
     if not nums:
         return ""
     return "$" + max(nums, key=lambda x: float(x.replace(",", "")))
@@ -1082,6 +1089,18 @@ class TaskWorker(threading.Thread):
                     rebuild = False
                     try:
                         while not self._stop.is_set() and not self.purchased:
+                            # Re-read live-editable fields each cycle so an edit made
+                            # while the task is running applies without a restart.
+                            # (account/proxies need a context rebuild → restart only.)
+                            qty = int(self.task.get("quantity", 1) or 1)
+                            interval = float(self.task.get("interval", 8) or 8)
+                            variant = (self.task.get("variant") or "").strip()
+                            payment = (self.task.get("payment") or "").strip()
+                            max_price = float(self.task.get("max_price") or 0)
+                            alert_only = bool(self.task.get("alert_only"))
+                            dry_run = bool(self.task.get("dry_run"))
+                            turbo = bool(self.task.get("turbo"))
+                            fast = bool(self.task.get("fast"))
                             # Lightweight pre-check (opt-in) — skip full load on clear OOS.
                             if fast:
                                 fc = fast_check(context, url, self.log)

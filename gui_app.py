@@ -710,8 +710,12 @@ class MainWindow(QMainWindow):
             self.table.setItem(r, C_PROXY, self._cell(proxy_txt))
             self.table.setItem(r, C_INT, self._cell(str(t.get("interval", 8)) + "s", editable=True))
             self.table.setItem(r, C_MODE, self._cell(self._mode(t)))
-            self.table.setItem(r, C_STATUS, self._status_item("idle"))
+            running = t["name"] in self.workers
+            self.table.setItem(r, C_STATUS, self._status_item(
+                self._statuses.get(t["name"], "idle") if running else "idle"))
             self.table.setCellWidget(r, C_ACT, self._action_cell(t["name"]))
+            if running:  # keep running tasks showing Stop, not Start
+                self._set_row_button(t["name"], start=False)
         self.table.setSortingEnabled(True)
         self._refreshing = False
         self.empty_hint.setVisible(not self.tasks)
@@ -955,12 +959,25 @@ class MainWindow(QMainWindow):
         name = self._selected_name()
         if not name:
             return
-        if name in self.workers:
-            QMessageBox.information(self, "Running", "Stop the task before editing."); return
         t = next(x for x in self.tasks if x["name"] == name)
+        running = name in self.workers
+        old_account = t.get("account", ""); old_proxies = t.get("proxies")
         dlg = TaskDialog(self, self.proxies, self.accounts, t)
-        if dlg.exec():
-            t.update(dlg.get_task()); self._save(); self._refresh_table()
+        if not dlg.exec():
+            return
+        new = dlg.get_task()
+        if running and new["name"] != name:
+            QMessageBox.information(self, "Rename while running",
+                                   "Stop the task to rename it — keeping the current name for now.")
+            new["name"] = name
+        t.update(new)          # worker holds this same dict, so most edits apply live
+        self._save()
+        self._refresh_table()  # preserves the running row's Stop button + status
+        if running:
+            if t.get("account", "") != old_account or t.get("proxies") != old_proxies:
+                self.log_line(name, "edited — restart the task to apply the account/proxy change")
+            else:
+                self.log_line(name, "edited — changes apply on the next check cycle")
 
     def dup_task(self):
         name = self._selected_name()

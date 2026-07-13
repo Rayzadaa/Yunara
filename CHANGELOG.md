@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.9.14 — edit while running + PayNow amount fix
+- **Edit a task while it's running.** ✎ Edit no longer makes you stop the task first —
+  changes to interval, quantity, variant, payment, max price, alert-only, dry-run, turbo
+  and fast apply on the next check cycle. (Account/proxy changes still need a restart;
+  renaming a running task is blocked.)
+- **PayNow amount fixed.** The reserved-order notification and orders log were showing a
+  blank amount; the parser now reads `SGD` / `S$` / `$` and falls back to the checkout
+  total, so you see the real amount to pay.
+- Fixed a refresh glitch where adding/duplicating/editing a task could momentarily show
+  other running tasks as idle.
+
 ## v2.9.13 — reliability & hardening
 - **Selector-health alert:** set a product URL under **🔔 Discord…** ("Selector health URL")
   and the bot checks on startup that Lazada's key buttons still resolve — pinging Discord if

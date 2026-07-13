@@ -1,7 +1,7 @@
 {
-  "version": "2.9.13",
+  "version": "2.9.14",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "98b31d149fa1c01a806fe4ffd76de5f0196d8481a11f45c0e668568be357a488",
-  "signature": "597d0e02fe4f160a22d8d255378b0f9a7ac641b7b64cf0d3b852f42dc19848d0719fbbe2a104695a173e2b04a5b687105399d3feac0528ab8234d0ae6e2f2f03",
-  "notes": "Reliability: startup selector-health alert (Discord ping if Lazada's layout changed), bot_data.json now encrypted at rest, bot.log capped, plus a unit-test suite in CI."
+  "sha256": "021763a377405b13ddbc7233fa18ab2a2ca9b722b8bc0045b12cbf4dc3d79113",
+  "signature": "966d4533017907598fb88a7e19dff938e74ed7bb92be75f8603891e0f221c6a574fbafedf428292ff2c1f90c2dd768e011718e7ed5403a63599e85f6b202ad06",
+  "notes": "You can now edit a task while it's running (changes apply on the next cycle), and the PayNow reserved-order amount is captured correctly (SGD/S$/$)."
 }

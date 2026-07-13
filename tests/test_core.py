@@ -49,6 +49,10 @@ def test_extract_amount():
     assert engine._extract_amount("Total $12.50 paid") == "$12.50"
     assert engine._extract_amount("$5.00 and $12.34") == "$12.34"  # picks the max
     assert engine._extract_amount("no amount here") == ""
+    # PayNow reserve page shows "SGD 8.29" / "S$8.29" — must be caught too.
+    assert engine._extract_amount("Pay within 30 min: SGD 8.29") == "$8.29"
+    assert engine._extract_amount("S$12.50 due now") == "$12.50"
+    assert engine._extract_amount("bare 8.29 no currency") == ""
 
 
 def test_session_path():
