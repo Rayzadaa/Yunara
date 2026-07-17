@@ -1,7 +1,7 @@
 {
-  "version": "2.9.14",
+  "version": "2.9.15",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "021763a377405b13ddbc7233fa18ab2a2ca9b722b8bc0045b12cbf4dc3d79113",
-  "signature": "966d4533017907598fb88a7e19dff938e74ed7bb92be75f8603891e0f221c6a574fbafedf428292ff2c1f90c2dd768e011718e7ed5403a63599e85f6b202ad06",
-  "notes": "You can now edit a task while it's running (changes apply on the next cycle), and the PayNow reserved-order amount is captured correctly (SGD/S$/$)."
+  "sha256": "8a761d6ea40ebb79df50757ed229b2a37ffd5762590d6f428c43e92f2171c207",
+  "signature": "ee39bfd34cfc902120d8f5779216897d298057e8327372ee88993dff5120e3f24b702ada71b368cff988ff24d4c431b2f2080f993ee3fa1e476ab8b010180c0a",
+  "notes": "New Fast product mode: HTTP-poll a product with no browser open and fire up the browser only on the drop \u2014 light on the PC, great for running many must-win tasks at once."
 }

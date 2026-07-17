@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.9.15 — Fast product mode
+- **⚡⚡ Fast product** (per-task option): instead of keeping a browser open and reloading
+  the page every cycle, it HTTP-polls the product (no browser, tiny footprint) and only
+  opens a browser the instant it detects a drop. Ideal when you're running many must-win
+  tasks — it frees up the PC so whichever one drops gets full resources to check out.
+  Trade-off: a ~1–2s browser cold-start on the drop vs. keeping a warm browser open.
+
 ## v2.9.14 — edit while running + PayNow amount fix
 - **Edit a task while it's running.** ✎ Edit no longer makes you stop the task first —
   changes to interval, quantity, variant, payment, max price, alert-only, dry-run, turbo

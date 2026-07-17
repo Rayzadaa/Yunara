@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.14"
+VERSION = "2.9.15"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -1056,6 +1056,12 @@ class TaskWorker(threading.Thread):
             self._run_keyword(keyword, interval, account, (self.task.get("url") or "").strip())
             return
 
+        if self.task.get("fast_product") and url:
+            self._await_schedule()
+            self._run_fast_product(url, interval, account, variant, payment, max_price, qty,
+                                   alert_only, dry_run)
+            return
+
         # Per-task proxy pool — fails over to the next proxy on a worker error.
         proxies_list = self.task.get("proxies")
         if not proxies_list:
@@ -1371,6 +1377,115 @@ class TaskWorker(threading.Thread):
                         pass
         except Exception as e:
             self.log(f"watchlist checkout error: {e}")
+
+    # ─── Fast product: HTTP-poll one URL, open a browser only on the drop ──
+
+    def _run_fast_product(self, url, interval, account, variant, payment, max_price, qty,
+                          alert_only, dry_run):
+        """HTTP-poll a single product (no browser) and open a browser to buy only
+        when it drops — near-zero footprint while waiting, so many of these run
+        without bogging the PC down. The browser cold-starts on the drop (~1–2s):
+        the trade-off vs. keeping a warm browser open. Best for a big must-win list."""
+        name = self.task["name"]
+        session_file = session_path(account, "")
+        self.log("fast-product: HTTP polling; a browser opens only on a drop")
+        last_verify = 0
+        while not self._stop.is_set() and not self.purchased:
+            # live-editable re-read (edits while running apply on the next poll)
+            interval = float(self.task.get("interval", 8) or 8)
+            variant = (self.task.get("variant") or "").strip()
+            payment = (self.task.get("payment") or "").strip()
+            max_price = float(self.task.get("max_price") or 0)
+            qty = int(self.task.get("quantity", 1) or 1)
+            alert_only = bool(self.task.get("alert_only"))
+            dry_run = bool(self.task.get("dry_run"))
+            turbo = bool(self.task.get("turbo"))
+            try:
+                r = http_stock(url)
+            except Exception as e:
+                self.log(f"fast-product poll error: {e}")
+                r = "unknown"
+            now = time.time()
+            # Escalate to the browser on a positive/uncertain signal; verify 'unknown'
+            # occasionally so a real drop is never missed if HTTP can't read it.
+            drop = r in ("in_stock", "captcha") or (r == "unknown" and now - last_verify > 45)
+            if r == "out_of_stock":
+                self.status("out of stock (fast http)")
+            elif not drop:
+                self.status("watching (http)")
+            if drop:
+                if r == "unknown":
+                    last_verify = now
+                self.status("DROP — verifying")
+                if self._fast_buy_once(url, session_file, variant, payment, max_price, qty,
+                                       alert_only, dry_run, turbo):
+                    return
+            self._wait(interval)
+
+    def _fast_buy_once(self, url, session_file, variant, payment, max_price, qty,
+                       alert_only, dry_run, turbo):
+        """Open a browser, verify stock, and buy once. Returns True when the task is
+        done (purchased, terminal outcome, or alerted); False to keep polling."""
+        name = self.task["name"]
+        try:
+            with sync_playwright() as p:
+                browser, context = _new_context(p, None, session_file)
+                page = context.new_page()
+                try:
+                    result, buy_btn = check_stock(page, url, variant, self.log, turbo)
+                    if result == "captcha":
+                        self.status("CAPTCHA — solve in window")
+                        notify(f"⚠️ *CAPTCHA* on *{name}* — solve it in the browser window.")
+                        handle_captcha(page, self.log)
+                        w = 0
+                        while w < 180 and not self._stop.is_set():
+                            if not check_for_captcha(page):
+                                break
+                            time.sleep(2); w += 2
+                        return False
+                    if result != "in_stock" or not buy_btn:
+                        self.log("fast-product: not in stock on verify")
+                        return False
+                    if not is_logged_in(page):
+                        prev = os.path.getmtime(session_file) if os.path.exists(session_file) else 0
+                        self._wait_for_relogin(session_file, prev)
+                        return False
+                    if alert_only:
+                        self.status("IN STOCK (alert only)")
+                        notifier.send_event("🟢 In Stock", description=name, url=url,
+                                            color=0x2ECC71, ping=True)
+                        return True
+                    self.status("IN STOCK — buying")
+                    notifier.send_event("🟢 In Stock — buying", description=name, url=url,
+                                        color=0xF1C40F, fields={"Qty": qty}, ping=True)
+                    set_quantity(page, qty, self.log)
+                    maybe_pause(turbo, 0.5, 1.0)
+                    try:
+                        buy_btn.click()
+                    except Exception as e:
+                        self.log(f"buy click failed: {e}")
+                        return False
+                    maybe_pause(turbo, 0.8, 1.5)
+                    self.status("checking out")
+                    outcome = complete_checkout(page, name, url, max_price, payment, dry_run, self.log, turbo)
+                    if outcome in ("ok", "pending"):
+                        self.purchased = True
+                        self.status("purchased ✓" if outcome == "ok"
+                                    else "ORDERED — PAY (PayNow, 30 min)")
+                        return True
+                    if outcome in ("limit", "stop"):
+                        self.status("limit reached — stopped" if outcome == "limit" else "checkout stopped")
+                        return True
+                    self.log(f"fast-product: checkout {outcome} — resuming poll")
+                    return False
+                finally:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+        except Exception as e:
+            self.log(f"fast-buy error: {e}")
+            return False
 
     @staticmethod
     def _backoff(interval, errors):
