@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.16"
+VERSION = "2.9.17"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -1609,6 +1609,57 @@ def self_test(url, log):
     for line in report:
         log("self-test: " + line)
     return report
+
+
+def warm_session(account, session_file, url, log):
+    """Pre-drop check: confirm a saved session is still logged in, refresh its
+    cookies, and warm the account with a normal-looking visit to the target
+    product. Run this BEFORE a drop so an expired session is discovered while you
+    can still do the OTP — not at drop time. Returns (ok, detail)."""
+    label = account or "default"
+    if not os.path.exists(session_file):
+        return (False, "no saved session — log in first")
+    try:
+        with sync_playwright() as p:
+            browser, context = _new_context(p, None, session_file)
+            page = context.new_page()
+            try:
+                page.goto("https://www.lazada.sg/", wait_until="domcontentloaded", timeout=30000)
+                human_pause(1.0, 2.0)
+                if check_for_captcha(page):
+                    return (False, "CAPTCHA — solve it in the window, then warm again")
+                if not is_logged_in(page):
+                    return (False, "session EXPIRED — log in again before the drop")
+                who = ""
+                try:
+                    trig = page.query_selector(SEL["account_trigger"])
+                    who = (trig.inner_text() or "").strip() if trig else ""
+                except Exception:
+                    pass
+                # Warm the actual product page so the account has recent, normal
+                # activity on the item it'll buy (helps reputation at drop time).
+                if url:
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        human_pause(1.2, 2.2)
+                        try:
+                            page.mouse.wheel(0, random.randint(500, 1500))
+                        except Exception:
+                            pass
+                        human_pause(0.5, 1.2)
+                        if check_for_captcha(page):
+                            return (False, "CAPTCHA on the product page — solve it in the window")
+                    except Exception as e:
+                        log(f"warm: product visit failed for {label}: {e}")
+                _save_session(context, session_file)  # refresh cookies on disk
+                return (True, f"ready{' — ' + who if who else ''}")
+            finally:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+    except Exception as e:
+        return (False, f"warm error: {e}")
 
 
 def selector_health(url, log):

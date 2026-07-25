@@ -1,7 +1,7 @@
 {
-  "version": "2.9.16",
+  "version": "2.9.17",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "71358bfe78941c31a9103610a9d3f1b19de9ddc5055c024a196263739939d054",
-  "signature": "ff71842ed27782a31915954a637a775cb38679aa4dce0f4bf0d9636e77e45a85541fb96f3fffea112f5c5210a43a0a6e7481180e91bd80195222a0476dd85a05",
-  "notes": "Short links are now resolved once and polled directly (~2x faster, far fewer \"unknown\" reads), and Fast product / Watch list poll as your logged-in session."
+  "sha256": "543735bd4149367d5c643b498a843f3de2eedd0337e1ca35d25c0747280a120a",
+  "signature": "8e2eb7e894ac656a7b7fad952b0ef2c498e2ae69567991f98df21336be0e6c3aa839a54f87482f6f77af73e2995a2f0fbf4b223e490c12c7fadc79c341057801",
+  "notes": "New Warm button: before a drop, verify every account is still logged in, refresh its cookies and warm it on the product page \u2014 so an expired session is caught while you can still fix it."
 }

@@ -162,6 +162,7 @@ class Bridge(QObject):
     needs_login = pyqtSignal(str, str, str)
     update_found = pyqtSignal(dict)
     update_done = pyqtSignal(bool, str)
+    warm_done = pyqtSignal()
 
 
 # ─── Dialogs ──────────────────────────────────────────────────────
@@ -458,6 +459,7 @@ class MainWindow(QMainWindow):
         self.bridge.needs_login.connect(self.on_needs_login)
         self.bridge.update_found.connect(self.on_update_found)
         self.bridge.update_done.connect(self._finish_update)
+        self.bridge.warm_done.connect(lambda: self.warm_btn.setEnabled(True))
 
         self._build_ui()
         self._load()
@@ -485,7 +487,11 @@ class MainWindow(QMainWindow):
         self.login_dot = QLabel("●"); self.login_dot.setStyleSheet("color:#ed4245; font-size:14px;")
         self.login_btn = QPushButton("🔐 Login"); self.login_btn.clicked.connect(self.login_clicked)
         self.login_lbl = QLabel("Not logged in")
-        bar.addWidget(self.login_dot); bar.addWidget(self.login_btn)
+        self.warm_btn = QPushButton("🔥 Warm"); self.warm_btn.clicked.connect(self.warm_sessions)
+        self.warm_btn.setToolTip("Pre-drop check: verify every account is still logged in, refresh "
+                                 "its cookies, and warm it on the product page.\nRun this BEFORE a "
+                                 "drop so an expired session is caught while you can still do the OTP.")
+        bar.addWidget(self.login_dot); bar.addWidget(self.login_btn); bar.addWidget(self.warm_btn)
         bar.addWidget(self.login_lbl); bar.addStretch(1)
 
         # Cluster 1 — run controls.
@@ -842,6 +848,59 @@ class MainWindow(QMainWindow):
 
     def show_orders(self):
         OrdersDialog(self).exec()
+
+    def warm_sessions(self):
+        """Pre-drop: verify/refresh/warm every account's session, sequentially."""
+        if self.workers:
+            r = QMessageBox.question(self, "Tasks running",
+                                     "Warming opens a browser per account and is best done before "
+                                     "starting tasks. Continue anyway?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if r != QMessageBox.StandardButton.Yes:
+                return
+        labels = [""] + [a["label"] for a in self.accounts]
+        self.warm_btn.setEnabled(False)
+        threading.Thread(target=self._warm_bg, args=(labels,), daemon=True).start()
+
+    def _warm_url_for(self, label):
+        """A product URL this account actually buys — warm on the real target."""
+        for t in self.tasks:
+            if (t.get("account", "") or "") == label and (t.get("url") or "").strip():
+                return t["url"].strip()
+        for t in self.tasks:  # fall back to any product task
+            if (t.get("url") or "").strip():
+                return t["url"].strip()
+        return ""
+
+    def _warm_bg(self, labels):
+        log = lambda m: self.bridge.log.emit("warm", m)
+        ready, problems = [], []
+        try:
+            for label in labels:
+                name = label or "default"
+                sf = engine.session_path(label, "")
+                if not os.path.exists(sf):
+                    continue  # account never logged in on this PC — nothing to warm
+                log(f"warming {name}…")
+                ok, detail = engine.warm_session(label, sf, self._warm_url_for(label), log)
+                log(f"{'✓' if ok else '✗'} {name}: {detail}")
+                (ready if ok else problems).append(f"{name}: {detail}")
+            if not ready and not problems:
+                log("no saved sessions found — log in first")
+            else:
+                summary = (f"{len(ready)} ready" + (f", {len(problems)} need attention" if problems else ""))
+                log(f"warm-up done — {summary}")
+                try:
+                    notifier.send_event(
+                        "🔥 Session warm-up: " + summary,
+                        description="\n".join(["✅ " + r for r in ready] + ["⚠️ " + p for p in problems]),
+                        color=0xE74C3C if problems else 0x2ECC71, ping=bool(problems))
+                except Exception:
+                    pass
+                if problems and desktop_alert:
+                    desktop_alert.play("captcha")
+        finally:
+            self.bridge.warm_done.emit()
 
     def _selector_health_bg(self):
         """Startup check that Lazada's key selectors still resolve; alert if not."""
