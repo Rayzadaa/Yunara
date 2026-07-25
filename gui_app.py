@@ -213,6 +213,8 @@ class TaskDialog(QDialog):
         self.turbo.setChecked(bool(t.get("turbo")))
         self.fast_product = QCheckBox("⚡⚡ Fast product (HTTP-poll only; a browser opens only on the drop — light, best when running many tasks)")
         self.fast_product.setChecked(bool(t.get("fast_product")))
+        self.poll_proxy = QCheckBox("🌐 Poll via proxies — spreads detection across your proxy IPs; CHECKOUT STAYS ON YOUR REAL IP (Fast product only)")
+        self.poll_proxy.setChecked(bool(t.get("poll_proxy")))
 
         form.addRow("Name", self.name)
         form.addRow("Product URL", self.url)
@@ -231,6 +233,7 @@ class TaskDialog(QDialog):
         form.addRow("", self.fast)
         form.addRow("", self.turbo)
         form.addRow("", self.fast_product)
+        form.addRow("", self.poll_proxy)
 
         row = QHBoxLayout()
         ok = QPushButton("Save"); cancel = QPushButton("Cancel")
@@ -251,6 +254,7 @@ class TaskDialog(QDialog):
             "alert_only": self.alert_only.isChecked(), "dry_run": self.dry_run.isChecked(),
             "fast": self.fast.isChecked(), "turbo": self.turbo.isChecked(),
             "fast_product": self.fast_product.isChecked(),
+            "poll_proxy": self.poll_proxy.isChecked(),
         }
 
 
@@ -687,6 +691,8 @@ class MainWindow(QMainWindow):
             m += "·fast"
         if t.get("turbo"):
             m += "·turbo"
+        if t.get("poll_proxy") and t.get("fast_product"):
+            m += "·pxpoll"
         return m
 
     def _cell(self, text, editable=False):
@@ -1136,7 +1142,8 @@ class MainWindow(QMainWindow):
             task,
             on_log=lambda n, m: self.bridge.log.emit(n, m),
             on_status=lambda n, s: self.bridge.status.emit(n, s),
-            on_needs_login=lambda n, a, px: self.bridge.needs_login.emit(n, a, px))
+            on_needs_login=lambda n, a, px: self.bridge.needs_login.emit(n, a, px),
+            proxy_pool=self.proxies)  # used for Fast product's polling only
         self.workers[name] = worker
         self._last_alert.pop(name, None)
         worker.start()

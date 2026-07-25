@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.19"
+VERSION = "2.9.20"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -569,7 +569,21 @@ def _http_session(cookies):
 _RESOLVED = {}  # short link -> real product URL (resolved once, then reused)
 
 
-def http_stock(url, cookies=None):
+def _proxy_dict(raw):
+    """requests-style proxies mapping from a 'host:port[:user:pass]' string."""
+    pd = parse_proxy(raw)
+    if not pd:
+        return None
+    server = pd["server"]
+    if "username" in pd:
+        scheme, rest = server.split("://", 1)
+        url = f"{scheme}://{pd['username']}:{pd['password']}@{rest}"
+    else:
+        url = server
+    return {"http": url, "https": url}
+
+
+def http_stock(url, cookies=None, proxy=None):
     """Browser-free stock check via HTTP. Resolves s.lazada.sg short links to the
     real product page, then reads stock. Pass `cookies` (from session_cookies) to
     poll as your logged-in account. Returns
@@ -582,8 +596,13 @@ def http_stock(url, cookies=None):
     try:
         sess = _http_session(cookies) if cookies else requests
         kw = {} if cookies else {"headers": _HTTP_HEADERS}
+        if proxy:
+            pd = _proxy_dict(proxy)
+            if pd:
+                kw["proxies"] = pd
+                kw.setdefault("timeout", 30)  # proxies are slower; allow for it
         target = _RESOLVED.get(url, url)
-        r = sess.get(target, timeout=15, **kw)
+        r = sess.get(target, timeout=kw.pop("timeout", 15), **kw)
         if not r.ok:
             if target != url:
                 _RESOLVED.pop(url, None)  # stale resolution — re-resolve next poll
@@ -598,7 +617,7 @@ def http_stock(url, cookies=None):
         m = re.search(r'https?://[^"\'<>\\ ]*lazada\.[^"\'<>\\ ]*/products/[^"\'<>\\ ]+\.html', r.text, re.I)
         if m and m.group(0).split("?")[0].lower() != final.split("?")[0]:
             real = m.group(0)
-            r2 = sess.get(real, timeout=15, **kw)
+            r2 = sess.get(real, timeout=30 if proxy else 15, **kw)
             if r2.ok:
                 f2 = (r2.url or "").lower()
                 if any(t in f2 for t in ["/punish", "captcha", "sec.lazada"]):
@@ -1077,12 +1096,13 @@ class LoginManager:
 # ─── Per-product task worker ──────────────────────────────────────
 
 class TaskWorker(threading.Thread):
-    def __init__(self, task, on_log, on_status, on_needs_login=None):
+    def __init__(self, task, on_log, on_status, on_needs_login=None, proxy_pool=None):
         super().__init__(daemon=True)
         self.task = task
         self.on_log = on_log
         self.on_status = on_status
         self.on_needs_login = on_needs_login or (lambda *a: None)
+        self.proxy_pool = proxy_pool or []
         self._stop = threading.Event()
         self.purchased = False
         self._account = ""
@@ -1502,10 +1522,23 @@ class TaskWorker(threading.Thread):
         name = self.task["name"]
         session_file = session_path(account, "")
         cookies = session_cookies(session_file)
-        self.log(f"fast-product: HTTP polling {'as your logged-in session' if cookies else '(logged-out — stock may read unknown; log in to improve)'}"
-                 "; a browser opens only on a drop")
+        # Split mode: rotate the detection polls across the proxy pool so the load
+        # is spread over many IPs (that IP rate-limit is what triggers CAPTCHAs),
+        # while checkout still runs on the REAL IP with the warm session — proxies
+        # are ~7x slower and would wreck checkout speed. Proxy polls go out
+        # ANONYMOUSLY (no session cookies), so the account is never seen from those
+        # IPs and can't be flagged for hopping addresses.
+        poll_pool = list(self.task.get("proxies") or self.proxy_pool or []) \
+            if self.task.get("poll_proxy") else []
+        if poll_pool:
+            self.log(f"fast-product: polling anonymously across {len(poll_pool)} proxy IP(s); "
+                     "checkout stays on your real IP")
+        else:
+            self.log(f"fast-product: HTTP polling {'as your logged-in session' if cookies else '(logged-out)'}"
+                     "; a browser opens only on a drop")
         last_verify = 0
         unknowns = 0
+        pidx = 0
         while not self._stop.is_set() and not self.purchased:
             # live-editable re-read (edits while running apply on the next poll)
             interval = float(self.task.get("interval", 8) or 8)
@@ -1516,12 +1549,30 @@ class TaskWorker(threading.Thread):
             alert_only = bool(self.task.get("alert_only"))
             dry_run = bool(self.task.get("dry_run"))
             turbo = bool(self.task.get("turbo"))
+            used_proxy = None
             try:
-                cookies = session_cookies(session_file)  # picks up a re-login automatically
-                r = http_stock(url, cookies)
+                if poll_pool:
+                    used_proxy = poll_pool[pidx % len(poll_pool)]
+                    pidx += 1
+                    r = http_stock(url, None, used_proxy)  # anonymous through the proxy
+                else:
+                    cookies = session_cookies(session_file)  # picks up a re-login automatically
+                    r = http_stock(url, cookies)
             except Exception as e:
                 self.log(f"fast-product poll error: {e}")
                 r = "unknown"
+            # A CAPTCHA from a PROXY poll means that exit IP is flagged by Lazada —
+            # not that the item dropped. Retire the bad IP and keep polling instead
+            # of opening a browser on a false signal. (From the real IP a CAPTCHA is
+            # still meaningful, so this only applies to proxy polls.)
+            if used_proxy and r == "captcha":
+                poll_pool = [p for p in poll_pool if p != used_proxy]
+                self.log(f"poll proxy flagged by Lazada, dropping it ({mask_proxy(used_proxy)}); "
+                         f"{len(poll_pool)} clean IP(s) left")
+                if not poll_pool:
+                    self.log("all poll proxies flagged — falling back to polling on your real IP")
+                self._wait(1)
+                continue
             now = time.time()
             # Warn once if HTTP can't read this product even authenticated — normal
             # mode polls far faster than the 45s browser fallback for such URLs.
