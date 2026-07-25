@@ -1,7 +1,7 @@
 {
-  "version": "2.9.18",
+  "version": "2.9.19",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "909328484981cd2c6b01c5b2693c66a2ed8bc5979c8a70201d05ad186bc06cb2",
-  "signature": "da24142a1c577975f3f75478c7df1cf3220cadbb16d9d58f6d4bfd36d5215c13ef64b3edfe5a7896e19bb3266d29f4943004ab9dac39fa806617e96e13fd2f00",
-  "notes": "Proxy credentials are no longer written to the log, and proxied tasks now clearly tell you when an account+proxy pair has no saved login (Login lets you pick the proxy to create it)."
+  "sha256": "bb88928648a6743d028757eb5f3b47d972c7a4f5771cc950f021f1b1cc500245",
+  "signature": "c21cce81bbe1d751c4df831b572e5fed3a74a5503632406ae4e9d045d0c34c26f12d70c43c889814b0b80111023473f853fc859ac90346cda7c541284cc50a0c",
+  "notes": "Fixes a false \"Login FAILED\" on slow or proxied connections \u2014 the bot now waits up to 60s for the post-OTP redirect instead of checking once."
 }

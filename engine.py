@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.18"
+VERSION = "2.9.19"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -1041,9 +1041,21 @@ class LoginManager:
                             break
                         time.sleep(2)
 
-                page.wait_for_timeout(2500)
+                # Wait for the post-OTP redirect to actually land, polling instead of
+                # checking once. A single short wait was enough on a fast direct
+                # connection but reported a false "Login FAILED" over a slow/proxied
+                # one, where the redirect can take far longer than the old 2.5s.
+                deadline = time.time() + 60
+                while time.time() < deadline:
+                    if is_logged_in(page):
+                        break
+                    if check_for_captcha(page):
+                        self.log("CAPTCHA during login — solve it in the window")
+                        handle_captcha(page, self.log)
+                    time.sleep(1.5)
                 if not is_logged_in(page):
-                    self.log("Login FAILED — still logged-out (check OTP / CAPTCHA).")
+                    self.log("Login FAILED — still logged-out after 60s "
+                             "(wrong/expired OTP, an unsolved CAPTCHA, or the connection is too slow).")
                     return False
 
                 trig = page.query_selector(SEL["account_trigger"])
