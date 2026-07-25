@@ -1,7 +1,7 @@
 {
-  "version": "2.9.20",
+  "version": "2.9.21",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "0bb986ca7d6442f74673665c0d3deb2c06ef828494b2c51fcc6789dcd36084ac",
-  "signature": "c0ea358b7fda500c081a9c3df9af85aa0c07a6f3f5c9380368305802239ebac7a2df72a6320af8e77eb82f8ae695e185c5c271bdf62d40a17773cd0d90793c0e",
-  "notes": "Split mode for Fast product: detection polls rotate anonymously across your proxy pool while checkout stays on your real IP; flagged proxy IPs are retired automatically."
+  "sha256": "11c9c8f757cf9ff30e2db6c606b4144044b1e193e78c34068e76f1fccace0b1e",
+  "signature": "6d517aab814e53744a9eb7bd50cc7e74f3d66ba64b783a49766ec5c17116067dcc54095c6641cae056cc467bdba6739b9d16ad0487111017389ddecc0e0d8801",
+  "notes": "Simplified task options from 6 checkboxes to 4: Fast monitor is replaced by Fast product, and Poll-via-proxies is now implied by giving a Fast product task proxies. Existing tasks migrate automatically."
 }

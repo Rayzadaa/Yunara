@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.20"
+VERSION = "2.9.21"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -308,30 +308,6 @@ def _is_lazada_host(url):
     except Exception:
         return False
     return host == "lazada.sg" or host.endswith(".lazada.sg") or host.endswith(".lazada.com")
-
-
-def fast_check(context, url, log):
-    """Cheap HTML fetch (uses the context's cookies + proxy) to short-circuit
-    obvious out-of-stock cases without a full page render. Conservative: only
-    returns 'out_of_stock' when confident, else 'unknown' (caller full-checks)."""
-    # Never drive the logged-in context at a non-Lazada host — if a stray URL
-    # slips into a task, fall through to the normal browser path instead of
-    # sending an authenticated request somewhere unexpected.
-    if not _is_lazada_host(url):
-        return "unknown"
-    try:
-        resp = context.request.get(url, timeout=15000)
-        if not resp.ok:
-            return "unknown"
-        html = resp.text()
-        low = html.lower()
-        # Strong out-of-stock signals embedded in the PDP data.
-        if re.search(r'"(?:quantity|stock)"\s*:\s*0\b', low) or "out of stock" in low or "sold out" in low:
-            return "out_of_stock"
-        return "unknown"
-    except Exception as e:
-        log(f"fast-check error: {e}")
-        return "unknown"
 
 
 def select_variant(page, variant, log, turbo=False):
@@ -945,7 +921,7 @@ def _record_order(name, order_no, amount):
 def _decorate(context):
     # NOTE: we intentionally do NOT block images/fonts here — doing so strips the
     # images out of Lazada's CAPTCHA (and login/checkout), making it unsolvable.
-    # Lightweight monitoring is handled separately by the opt-in fast_check().
+    # Lightweight monitoring is handled separately by Fast product's HTTP polling.
     try:
         context.add_init_script(_STEALTH_JS)
     except Exception:
@@ -1160,7 +1136,6 @@ class TaskWorker(threading.Thread):
         dry_run = bool(self.task.get("dry_run"))
         max_price = float(self.task.get("max_price") or 0)
         payment = (self.task.get("payment") or "").strip()
-        fast = bool(self.task.get("fast"))
         turbo = bool(self.task.get("turbo"))
         self._account = account
 
@@ -1238,15 +1213,6 @@ class TaskWorker(threading.Thread):
                             alert_only = bool(self.task.get("alert_only"))
                             dry_run = bool(self.task.get("dry_run"))
                             turbo = bool(self.task.get("turbo"))
-                            fast = bool(self.task.get("fast"))
-                            # Lightweight pre-check (opt-in) — skip full load on clear OOS.
-                            if fast:
-                                fc = fast_check(context, url, self.log)
-                                if fc == "out_of_stock":
-                                    errors = 0
-                                    self.status("out of stock (fast)")
-                                    self._wait(interval); continue
-
                             blocker.enabled = turbo  # block images only while monitoring
                             self.status("checking")
                             result, buy_btn = check_stock(page, url, variant, self.log, turbo)
@@ -1528,8 +1494,9 @@ class TaskWorker(threading.Thread):
         # are ~7x slower and would wreck checkout speed. Proxy polls go out
         # ANONYMOUSLY (no session cookies), so the account is never seen from those
         # IPs and can't be flagged for hopping addresses.
-        poll_pool = list(self.task.get("proxies") or self.proxy_pool or []) \
-            if self.task.get("poll_proxy") else []
+        # In Fast product mode checkout always runs on the real IP, so any proxies
+        # assigned to the task can only mean one thing: use them for the polls.
+        poll_pool = list(self.task.get("proxies") or [])
         if poll_pool:
             self.log(f"fast-product: polling anonymously across {len(poll_pool)} proxy IP(s); "
                      "checkout stays on your real IP")

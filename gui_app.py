@@ -208,13 +208,10 @@ class TaskDialog(QDialog):
         self.proxy.setPlainText("\n".join(existing or []))
         self.alert_only = QCheckBox("Alert only (notify, don't buy)"); self.alert_only.setChecked(bool(t.get("alert_only")))
         self.dry_run = QCheckBox("Dry run (stop at Place Order, don't click)"); self.dry_run.setChecked(bool(t.get("dry_run")))
-        self.fast = QCheckBox("Fast monitor (lightweight pre-check)"); self.fast.setChecked(bool(t.get("fast")))
         self.turbo = QCheckBox("⚡ Turbo mode (block images while monitoring + trim checkout delays — faster, slightly higher detection risk)")
         self.turbo.setChecked(bool(t.get("turbo")))
-        self.fast_product = QCheckBox("⚡⚡ Fast product (HTTP-poll only; a browser opens only on the drop — light, best when running many tasks)")
+        self.fast_product = QCheckBox("⚡⚡ Fast product (no browser while watching — opens one only on the drop; add proxies above to spread polling, checkout always uses your real IP)")
         self.fast_product.setChecked(bool(t.get("fast_product")))
-        self.poll_proxy = QCheckBox("🌐 Poll via proxies — spreads detection across your proxy IPs; CHECKOUT STAYS ON YOUR REAL IP (Fast product only)")
-        self.poll_proxy.setChecked(bool(t.get("poll_proxy")))
 
         form.addRow("Name", self.name)
         form.addRow("Product URL", self.url)
@@ -230,10 +227,8 @@ class TaskDialog(QDialog):
         form.addRow("Proxies (one/line)", self.proxy)
         form.addRow("", self.alert_only)
         form.addRow("", self.dry_run)
-        form.addRow("", self.fast)
         form.addRow("", self.turbo)
         form.addRow("", self.fast_product)
-        form.addRow("", self.poll_proxy)
 
         row = QHBoxLayout()
         ok = QPushButton("Save"); cancel = QPushButton("Cancel")
@@ -252,9 +247,7 @@ class TaskDialog(QDialog):
             "payment": self.payment.currentText().strip(),
             "proxies": [ln.strip() for ln in self.proxy.toPlainText().splitlines() if ln.strip()],
             "alert_only": self.alert_only.isChecked(), "dry_run": self.dry_run.isChecked(),
-            "fast": self.fast.isChecked(), "turbo": self.turbo.isChecked(),
-            "fast_product": self.fast_product.isChecked(),
-            "poll_proxy": self.poll_proxy.isChecked(),
+            "turbo": self.turbo.isChecked(), "fast_product": self.fast_product.isChecked(),
         }
 
 
@@ -652,10 +645,15 @@ class MainWindow(QMainWindow):
         if data:
             try:
                 self.tasks = data.get("tasks", [])
-                for t in self.tasks:  # migrate old single proxy -> list
-                    if "proxies" not in t:
-                        t["proxies"] = [t["proxy"]] if t.get("proxy") else []
                 self.proxies = data.get("proxies", [])
+                for t in self.tasks:
+                    if "proxies" not in t:  # migrate old single proxy -> list
+                        t["proxies"] = [t["proxy"]] if t.get("proxy") else []
+                    # v2.9.21: "poll_proxy" is gone — a Fast product task simply polls
+                    # through whatever proxies it has, so carry the pool onto the task.
+                    if t.pop("poll_proxy", None) and not t.get("proxies"):
+                        t["proxies"] = list(self.proxies)
+                    t.pop("fast", None)  # "Fast monitor" removed — Fast product supersedes it
                 self.accounts = data.get("accounts", [])
                 self.webhook_url = data.get("webhook", ""); self.role_id = data.get("role", "")
                 self.health_url = data.get("health_url", "")
@@ -687,12 +685,10 @@ class MainWindow(QMainWindow):
         m = "alert" if t.get("alert_only") else ("dry" if t.get("dry_run") else "buy")
         if t.get("fast_product"):
             m += "·fastP"
-        elif t.get("fast"):
-            m += "·fast"
+            if t.get("proxies"):
+                m += "·pxpoll"
         if t.get("turbo"):
             m += "·turbo"
-        if t.get("poll_proxy") and t.get("fast_product"):
-            m += "·pxpoll"
         return m
 
     def _cell(self, text, editable=False):
