@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.15"
+VERSION = "2.9.16"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -496,13 +496,81 @@ def _parse_stock(low):
     return "unknown"
 
 
-def http_stock(url):
-    """Browser-free stock check via HTTP. Resolves s.lazada.sg short links to the
-    real product page, then reads stock. Returns
-    'in_stock' / 'out_of_stock' / 'captcha' / 'unknown' (heuristic, thread-safe)."""
+_COOKIE_CACHE = {}  # session_file -> (mtime, [cookie dicts])
+_COOKIE_LOCK = threading.Lock()
+
+
+def session_cookies(session_file):
+    """Lazada cookies from a saved (encrypted) session, for authenticated HTTP
+    polling. Logged-out requests get a stripped page whose stock signals are
+    unreadable; with the real session the PDP reads reliably. Cached by mtime so
+    a fast poll loop doesn't decrypt the file every cycle. Lazada domains only."""
+    if not session_file or not os.path.exists(session_file):
+        return []
     try:
-        r = requests.get(url, headers=_HTTP_HEADERS, timeout=12)
+        mtime = os.path.getmtime(session_file)
+    except Exception:
+        return []
+    with _COOKIE_LOCK:
+        hit = _COOKIE_CACHE.get(session_file)
+        if hit and hit[0] == mtime:
+            return hit[1]
+    state = _load_session_arg(session_file)
+    if not isinstance(state, dict):  # path fallback (no secure_store) — read directly
+        try:
+            import json as _json
+            with open(session_file, encoding="utf-8") as f:
+                state = _json.load(f)
+        except Exception:
+            state = None
+    cookies = []
+    if isinstance(state, dict):
+        for c in state.get("cookies", []) or []:
+            dom = (c.get("domain") or "").lstrip(".").lower()
+            if dom.endswith("lazada.sg") or dom.endswith("lazada.com"):
+                cookies.append({"name": c.get("name", ""), "value": c.get("value", ""),
+                                "domain": c.get("domain", ""), "path": c.get("path", "/")})
+    with _COOKIE_LOCK:
+        _COOKIE_CACHE[session_file] = (mtime, cookies)
+    return cookies
+
+
+def _http_session(cookies):
+    """A requests session carrying the Lazada cookies. Cookies keep their domain
+    attribute, so requests only sends them to matching hosts — a redirect or an
+    extracted link to another host never receives the session."""
+    s = requests.Session()
+    s.headers.update(_HTTP_HEADERS)
+    for c in cookies or []:
+        try:
+            s.cookies.set(c["name"], c["value"],
+                          domain=(c.get("domain") or "").lstrip("."), path=c.get("path") or "/")
+        except Exception:
+            pass
+    return s
+
+
+_RESOLVED = {}  # short link -> real product URL (resolved once, then reused)
+
+
+def http_stock(url, cookies=None):
+    """Browser-free stock check via HTTP. Resolves s.lazada.sg short links to the
+    real product page, then reads stock. Pass `cookies` (from session_cookies) to
+    poll as your logged-in account. Returns
+    'in_stock' / 'out_of_stock' / 'captcha' / 'unknown' (heuristic, thread-safe).
+
+    A short link normally costs TWO requests per poll (stub + real page). The
+    resolved URL is cached, so after the first poll we hit the product page
+    directly — halving the requests and removing the flaky hop that made fast
+    polling report 'unknown' under load."""
+    try:
+        sess = _http_session(cookies) if cookies else requests
+        kw = {} if cookies else {"headers": _HTTP_HEADERS}
+        target = _RESOLVED.get(url, url)
+        r = sess.get(target, timeout=15, **kw)
         if not r.ok:
+            if target != url:
+                _RESOLVED.pop(url, None)  # stale resolution — re-resolve next poll
             return "unknown"
         final = (r.url or "").lower()
         if "/punish" in final or "captcha" in final or "sec.lazada" in final:
@@ -510,15 +578,19 @@ def http_stock(url):
         result = _parse_stock(r.text.lower())
         if result != "unknown":
             return result
-        # Short-link JS stub? Pull the real product URL out of it and re-check.
+        # Short-link JS stub? Pull the real product URL out of it, cache it, re-check.
         m = re.search(r'https?://[^"\'<>\\ ]*lazada\.[^"\'<>\\ ]*/products/[^"\'<>\\ ]+\.html', r.text, re.I)
         if m and m.group(0).split("?")[0].lower() != final.split("?")[0]:
-            r2 = requests.get(m.group(0), headers=_HTTP_HEADERS, timeout=12)
+            real = m.group(0)
+            r2 = sess.get(real, timeout=15, **kw)
             if r2.ok:
                 f2 = (r2.url or "").lower()
                 if any(t in f2 for t in ["/punish", "captcha", "sec.lazada"]):
                     return "captcha"
-                return _parse_stock(r2.text.lower())
+                out = _parse_stock(r2.text.lower())
+                if out != "unknown":
+                    _RESOLVED[url] = real  # cache only a resolution that actually reads
+                return out
         return "unknown"
     except Exception:
         return "unknown"
@@ -1297,9 +1369,10 @@ class TaskWorker(threading.Thread):
                 return
             self.status(f"polling {len(active)} URLs")
             results = {}
+            cookies = session_cookies(session_file)  # poll as the logged-in account
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, len(active))) as ex:
-                    futs = {ex.submit(http_stock, u): u for u in active}
+                    futs = {ex.submit(http_stock, u, cookies): u for u in active}
                     for f in concurrent.futures.as_completed(futs, timeout=30):
                         u = futs[f]
                         try:
@@ -1388,8 +1461,11 @@ class TaskWorker(threading.Thread):
         the trade-off vs. keeping a warm browser open. Best for a big must-win list."""
         name = self.task["name"]
         session_file = session_path(account, "")
-        self.log("fast-product: HTTP polling; a browser opens only on a drop")
+        cookies = session_cookies(session_file)
+        self.log(f"fast-product: HTTP polling {'as your logged-in session' if cookies else '(logged-out — stock may read unknown; log in to improve)'}"
+                 "; a browser opens only on a drop")
         last_verify = 0
+        unknowns = 0
         while not self._stop.is_set() and not self.purchased:
             # live-editable re-read (edits while running apply on the next poll)
             interval = float(self.task.get("interval", 8) or 8)
@@ -1401,11 +1477,21 @@ class TaskWorker(threading.Thread):
             dry_run = bool(self.task.get("dry_run"))
             turbo = bool(self.task.get("turbo"))
             try:
-                r = http_stock(url)
+                cookies = session_cookies(session_file)  # picks up a re-login automatically
+                r = http_stock(url, cookies)
             except Exception as e:
                 self.log(f"fast-product poll error: {e}")
                 r = "unknown"
             now = time.time()
+            # Warn once if HTTP can't read this product even authenticated — normal
+            # mode polls far faster than the 45s browser fallback for such URLs.
+            if r == "unknown":
+                unknowns += 1
+                if unknowns == 5:
+                    self.log("fast-product: HTTP can't read this product's stock — "
+                             "consider unticking Fast product for it (normal mode detects sooner)")
+            else:
+                unknowns = 0
             # Escalate to the browser on a positive/uncertain signal; verify 'unknown'
             # occasionally so a real drop is never missed if HTTP can't read it.
             drop = r in ("in_stock", "captcha") or (r == "unknown" and now - last_verify > 45)

@@ -55,6 +55,58 @@ def test_extract_amount():
     assert engine._extract_amount("bare 8.29 no currency") == ""
 
 
+def test_session_cookies_filters_non_lazada(tmp_path):
+    p = str(tmp_path / "lazada_session.json")
+    secure_store.save(p, {"cookies": [
+        {"name": "lzd_sid", "value": "SECRET", "domain": ".lazada.sg", "path": "/"},
+        {"name": "evil", "value": "NOPE", "domain": ".evil.com", "path": "/"},
+        {"name": "lzdcom", "value": "OK", "domain": ".lazada.com", "path": "/"},
+    ], "origins": []})
+    got = engine.session_cookies(p)
+    names = {c["name"] for c in got}
+    assert names == {"lzd_sid", "lzdcom"}          # non-Lazada cookie dropped
+    assert engine.session_cookies(p) == got         # mtime cache returns the same
+    assert engine.session_cookies(str(tmp_path / "missing.json")) == []
+
+
+def test_http_session_cookies_are_domain_scoped(tmp_path):
+    """Session cookies must never be sent to a non-Lazada host (redirect/extracted link)."""
+    import requests
+    from requests.cookies import get_cookie_header
+    s = engine._http_session([
+        {"name": "lzd_sid", "value": "SECRET", "domain": ".lazada.sg", "path": "/"}])
+    to_evil = get_cookie_header(s.cookies, requests.Request("GET", "https://evil.com/x").prepare())
+    to_lzd = get_cookie_header(s.cookies, requests.Request("GET", "https://www.lazada.sg/p.html").prepare())
+    assert not to_evil                    # nothing leaks off-domain
+    assert "SECRET" in (to_lzd or "")     # but Lazada does get it
+
+
+def test_http_stock_caches_resolved_short_link(monkeypatch):
+    """A short link should be resolved once, then polled directly (1 request, not 2)."""
+    short = "https://s.lazada.sg/s.ABC"
+    real = "https://www.lazada.sg/products/thing-i123-s456.html"
+    calls = []
+
+    class Resp:
+        def __init__(self, url, text):
+            self.url, self.text, self.ok = url, text, True
+
+    def fake_get(u, **kw):
+        calls.append(u)
+        if u == short:
+            return Resp(short, f'stub <a href="{real}">x</a>')
+        return Resp(real, "add to cart")
+
+    monkeypatch.setattr(engine.requests, "get", fake_get)
+    engine._RESOLVED.pop(short, None)
+    assert engine.http_stock(short) == "in_stock"
+    assert calls == [short, real]           # cold: stub + real page
+    calls.clear()
+    assert engine.http_stock(short) == "in_stock"
+    assert calls == [real]                  # warm: straight to the product page
+    engine._RESOLVED.pop(short, None)
+
+
 def test_session_path():
     assert engine.session_path("", "") == engine.SESSION_FILE
     keyed = engine.session_path("main", "")

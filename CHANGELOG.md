@@ -1,4 +1,13 @@
-# Changelog
+## v2.9.16 — faster, more reliable HTTP polling
+- **Short links are resolved once, then polled directly.** A `s.lazada.sg` link used to
+  cost two requests every single poll (stub page, then the real product page) — slow, and
+  a hiccup on either hop made the check come back "unknown" (which then fell back to a
+  slow browser re-check). The resolved product URL is now cached, so polls are **~2×
+  faster** and far more reliable — measured 0.9s → 0.5s on real links.
+- **Fast product and Watch list now poll as your logged-in session**, matching what the
+  browser sees, and pick up a re-login automatically.
+- Fast product warns in the log if a product's stock genuinely can't be read over HTTP,
+  so you know to untick it for that item.
 
 ## v2.9.15 — Fast product mode
 - **⚡⚡ Fast product** (per-task option): instead of keeping a browser open and reloading
