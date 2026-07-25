@@ -1,7 +1,7 @@
 {
-  "version": "2.9.17",
+  "version": "2.9.18",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "543735bd4149367d5c643b498a843f3de2eedd0337e1ca35d25c0747280a120a",
-  "signature": "8e2eb7e894ac656a7b7fad952b0ef2c498e2ae69567991f98df21336be0e6c3aa839a54f87482f6f77af73e2995a2f0fbf4b223e490c12c7fadc79c341057801",
-  "notes": "New Warm button: before a drop, verify every account is still logged in, refresh its cookies and warm it on the product page \u2014 so an expired session is caught while you can still fix it."
+  "sha256": "909328484981cd2c6b01c5b2693c66a2ed8bc5979c8a70201d05ad186bc06cb2",
+  "signature": "da24142a1c577975f3f75478c7df1cf3220cadbb16d9d58f6d4bfd36d5215c13ef64b3edfe5a7896e19bb3266d29f4943004ab9dac39fa806617e96e13fd2f00",
+  "notes": "Proxy credentials are no longer written to the log, and proxied tasks now clearly tell you when an account+proxy pair has no saved login (Login lets you pick the proxy to create it)."
 }

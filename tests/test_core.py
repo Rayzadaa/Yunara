@@ -107,6 +107,26 @@ def test_http_stock_caches_resolved_short_link(monkeypatch):
     engine._RESOLVED.pop(short, None)
 
 
+def test_mask_proxy_hides_credentials():
+    """Proxy user:pass must never reach bot.log / Discord (the log is plaintext)."""
+    assert engine.mask_proxy("host.io:8603:someuser:secretpass") == "host.io:8603:***:***"
+    assert engine.mask_proxy("http://1.2.3.4:8080:u:p") == "http://1.2.3.4:8080:***:***"
+    assert engine.mask_proxy("1.2.3.4:8080") == "1.2.3.4:8080"     # nothing to hide
+    assert engine.mask_proxy("") == ""
+    for secret in ("someuser", "secretpass"):
+        assert secret not in engine.mask_proxy("host.io:8603:someuser:secretpass")
+
+
+def test_session_path_pairs_account_and_proxy():
+    """Each account+proxy pair keeps its own login — the basis of the pair warning."""
+    a = engine.session_path("BB", "")
+    b = engine.session_path("BB", "1.2.3.4:8080")
+    c = engine.session_path("BB", "9.9.9.9:8080")
+    d = engine.session_path("ALT", "1.2.3.4:8080")
+    assert len({a, b, c, d}) == 4                       # every pair is distinct
+    assert engine.session_path("BB", "1.2.3.4:8080") == b  # and deterministic
+
+
 def test_session_path():
     assert engine.session_path("", "") == engine.SESSION_FILE
     keyed = engine.session_path("main", "")

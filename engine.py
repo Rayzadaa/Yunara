@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.17"
+VERSION = "2.9.18"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -120,6 +120,22 @@ def parse_proxy(raw):
     if len(parts) == 4:
         return {"server": f"{scheme}://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
     return None
+
+
+def mask_proxy(raw):
+    """host:port with credentials hidden — use this anywhere a proxy string is
+    logged or notified, so bot.log / Discord never carry proxy user:pass."""
+    if not raw:
+        return ""
+    raw = raw.strip()
+    scheme = ""
+    if "://" in raw:
+        scheme, raw = raw.split("://", 1)
+        scheme += "://"
+    parts = raw.split(":")
+    if len(parts) >= 4:
+        return f"{scheme}{parts[0]}:{parts[1]}:***:***"
+    return scheme + raw
 
 
 def test_proxy(raw, timeout=15):
@@ -1153,7 +1169,19 @@ class TaskWorker(threading.Thread):
             session_file = session_path(account, current_raw)
             login_verified = False
             if len(proxies_list) > 1:
-                self.log(f"using proxy {(pidx % len(proxies_list)) + 1}/{len(proxies_list)}")
+                self.log(f"using proxy {(pidx % len(proxies_list)) + 1}/{len(proxies_list)} "
+                         f"({mask_proxy(current_raw)})")
+            # Logins are stored per ACCOUNT+PROXY pair. Running an account through a
+            # proxy it has never logged in on starts logged-out — which forces a
+            # re-login from a brand-new IP (a prime CAPTCHA trigger). Say so up front
+            # instead of letting it look like a random "session expired".
+            if current_raw and not os.path.exists(session_file):
+                pair = f"{account or 'default'} @ {mask_proxy(current_raw)}"
+                self.log(f"NO SAVED LOGIN for this account+proxy pair ({pair}) — "
+                         "log in through this proxy first (Login → pick the account AND this "
+                         "proxy), or clear the task's proxy to use your real IP")
+                self.status("needs login for account+proxy")
+                notify(f"⚠️ *{name}*: no saved login for `{pair}` — log in through that proxy first.")
             try:
                 with sync_playwright() as p:
                     browser, context = _new_context(p, proxy, session_file)

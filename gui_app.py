@@ -938,16 +938,28 @@ class MainWindow(QMainWindow):
         return ""
 
     def login_clicked(self):
-        """Let the user pick which account to log in (default = config phone)."""
+        """Pick which account — and, if proxies are configured, which proxy — to log
+        in. Logins are saved per ACCOUNT+PROXY pair, so a task using a proxy needs a
+        login created through that same proxy."""
+        label = ""
         if self.accounts:
             choices = ["(default account)"] + [a["label"] for a in self.accounts]
             choice, ok = QInputDialog.getItem(self, "Login", "Log in as which account?",
                                               choices, 0, False)
             if not ok:
                 return
-            self.do_login("" if choice.startswith("(default") else choice)
-        else:
-            self.do_login()
+            label = "" if choice.startswith("(default") else choice
+        proxy_raw = ""
+        if self.proxies:
+            opts = ["(no proxy — my real IP)"] + [engine.mask_proxy(p) for p in self.proxies]
+            pick, ok = QInputDialog.getItem(
+                self, "Login", "Log in through which connection?\n"
+                                "(the login is saved for this account+proxy pair)", opts, 0, False)
+            if not ok:
+                return
+            if not pick.startswith("(no proxy"):
+                proxy_raw = self.proxies[opts.index(pick) - 1]
+        self.do_login(label, proxy_raw)
 
     def do_login(self, account_label="", proxy_raw=""):
         if self._login_busy:
@@ -962,7 +974,10 @@ class MainWindow(QMainWindow):
         session_file = engine.session_path(account_label, proxy_raw)
         self._login_busy = True
         self.login_btn.setEnabled(False)
-        self.login_lbl.setText(f"Logging in ({account_label or 'default'})…")
+        via = f" via {engine.mask_proxy(proxy_raw)}" if proxy_raw else ""
+        self.login_lbl.setText(f"Logging in ({account_label or 'default'}{via})…")
+        self.log_line("login", f"logging in: account={account_label or 'default'}"
+                               f"{', proxy=' + engine.mask_proxy(proxy_raw) if proxy_raw else ''}")
         self._set_login_dot("#faa61a")  # amber while in progress
 
         def get_otp():
@@ -1082,7 +1097,8 @@ class MainWindow(QMainWindow):
         def run():
             for px in proxies:
                 ok, msg = engine.test_proxy(px)
-                self.bridge.log.emit("proxy-test", f"{'✓' if ok else '✗'} {px} — {msg}")
+                # never log proxy credentials — bot.log is plaintext on disk
+                self.bridge.log.emit("proxy-test", f"{'✓' if ok else '✗'} {engine.mask_proxy(px)} — {msg}")
         threading.Thread(target=run, daemon=True).start()
 
     def manage_webhook(self):
