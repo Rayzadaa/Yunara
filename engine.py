@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.21"
+VERSION = "2.9.22"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -299,15 +299,22 @@ def _first(page, selectors):
     return None
 
 
-# ─── Lightweight stock pre-check (opt-in) ─────────────────────────
+# ─── Lazada host checks ───────────────────────────────────────────
+
+def _is_lazada_domain(host):
+    """Exact Lazada domain or a subdomain of it — never a look-alike such as
+    'evillazada.sg' or 'lazada.sg.evil.com'."""
+    host = (host or "").lstrip(".").lower()
+    return host in ("lazada.sg", "lazada.com") or host.endswith((".lazada.sg", ".lazada.com"))
+
 
 def _is_lazada_host(url):
     try:
         from urllib.parse import urlparse
-        host = (urlparse(url).hostname or "").lower()
+        host = urlparse(url).hostname or ""
     except Exception:
         return False
-    return host == "lazada.sg" or host.endswith(".lazada.sg") or host.endswith(".lazada.com")
+    return _is_lazada_domain(host)
 
 
 def select_variant(page, variant, log, turbo=False):
@@ -518,8 +525,7 @@ def session_cookies(session_file):
     cookies = []
     if isinstance(state, dict):
         for c in state.get("cookies", []) or []:
-            dom = (c.get("domain") or "").lstrip(".").lower()
-            if dom.endswith("lazada.sg") or dom.endswith("lazada.com"):
+            if _is_lazada_domain(c.get("domain")):
                 cookies.append({"name": c.get("name", ""), "value": c.get("value", ""),
                                 "domain": c.get("domain", ""), "path": c.get("path", "/")})
     with _COOKIE_LOCK:
@@ -563,22 +569,27 @@ def http_stock(url, cookies=None, proxy=None):
     """Browser-free stock check via HTTP. Resolves s.lazada.sg short links to the
     real product page, then reads stock. Pass `cookies` (from session_cookies) to
     poll as your logged-in account. Returns
-    'in_stock' / 'out_of_stock' / 'captcha' / 'unknown' (heuristic, thread-safe).
+    'in_stock' / 'out_of_stock' / 'captcha' / 'unknown' (heuristic, thread-safe),
+    or 'proxy_error' when a `proxy` was given but Lazada couldn't be reached
+    through it (dead host, bad credentials, refused or timed-out tunnel) — so the
+    caller can stop using that proxy instead of blaming the product.
 
     A short link normally costs TWO requests per poll (stub + real page). The
     resolved URL is cached, so after the first poll we hit the product page
     directly — halving the requests and removing the flaky hop that made fast
     polling report 'unknown' under load."""
     try:
-        sess = _http_session(cookies) if cookies else requests
         kw = {} if cookies else {"headers": _HTTP_HEADERS}
+        timeout = 15
         if proxy:
             pd = _proxy_dict(proxy)
-            if pd:
-                kw["proxies"] = pd
-                kw.setdefault("timeout", 30)  # proxies are slower; allow for it
+            if not pd:
+                return "proxy_error"  # unusable proxy line — never quietly poll direct instead
+            kw["proxies"] = pd
+            timeout = (10, 30)  # proxies answer slowly, but a dead one fails to connect fast
+        sess = _http_session(cookies) if cookies else requests
         target = _RESOLVED.get(url, url)
-        r = sess.get(target, timeout=kw.pop("timeout", 15), **kw)
+        r = sess.get(target, timeout=timeout, **kw)
         if not r.ok:
             if target != url:
                 _RESOLVED.pop(url, None)  # stale resolution — re-resolve next poll
@@ -590,10 +601,12 @@ def http_stock(url, cookies=None, proxy=None):
         if result != "unknown":
             return result
         # Short-link JS stub? Pull the real product URL out of it, cache it, re-check.
+        # Only follow it to a real Lazada host: a stub pointing at a look-alike such
+        # as lazada.sg.evil.com must never be fetched, trusted or cached.
         m = re.search(r'https?://[^"\'<>\\ ]*lazada\.[^"\'<>\\ ]*/products/[^"\'<>\\ ]+\.html', r.text, re.I)
-        if m and m.group(0).split("?")[0].lower() != final.split("?")[0]:
+        if m and _is_lazada_host(m.group(0)) and m.group(0).split("?")[0].lower() != final.split("?")[0]:
             real = m.group(0)
-            r2 = sess.get(real, timeout=30 if proxy else 15, **kw)
+            r2 = sess.get(real, timeout=timeout, **kw)
             if r2.ok:
                 f2 = (r2.url or "").lower()
                 if any(t in f2 for t in ["/punish", "captcha", "sec.lazada"]):
@@ -603,6 +616,10 @@ def http_stock(url, cookies=None, proxy=None):
                     _RESOLVED[url] = real  # cache only a resolution that actually reads
                 return out
         return "unknown"
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        # Covers DNS failures, refused connections and proxy tunnel/auth errors.
+        # Through a proxy that's the proxy's fault; direct it's just a missed poll.
+        return "proxy_error" if proxy else "unknown"
     except Exception:
         return "unknown"
 
@@ -1079,7 +1096,9 @@ class TaskWorker(threading.Thread):
         self.on_status = on_status
         self.on_needs_login = on_needs_login or (lambda *a: None)
         self.proxy_pool = proxy_pool or []
-        self._stop = threading.Event()
+        # Not `_stop`: threading.Thread has its own _stop() method, and shadowing it
+        # with an Event makes join()/is_alive() crash once the thread has finished.
+        self._stop_event = threading.Event()
         self.purchased = False
         self._account = ""
         self._cur_proxy = ""
@@ -1091,7 +1110,7 @@ class TaskWorker(threading.Thread):
         self.on_status(self.task["name"], s)
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
 
     def _await_schedule(self):
         start_at = (self.task.get("start_at") or "").strip()
@@ -1105,7 +1124,7 @@ class TaskWorker(threading.Thread):
             if target <= now:
                 target += dt.timedelta(days=1)
             self.status(f"scheduled {start_at}")
-            while not self._stop.is_set() and dt.datetime.now() < target:
+            while not self._stop_event.is_set() and dt.datetime.now() < target:
                 time.sleep(1)
         except Exception as e:
             self.log(f"bad start time {start_at!r}: {e}")
@@ -1115,7 +1134,7 @@ class TaskWorker(threading.Thread):
         self.on_needs_login(self.task["name"], self._account, self._cur_proxy)
         notify(f"🔑 *{self.task['name']}*: session expired — please re-login.")
         waited = 0
-        while not self._stop.is_set() and waited < 300:
+        while not self._stop_event.is_set() and waited < 300:
             try:
                 if os.path.exists(session_file) and os.path.getmtime(session_file) > prev_mtime:
                     self.log("session refreshed — resuming")
@@ -1169,7 +1188,7 @@ class TaskWorker(threading.Thread):
         errors = 0  # consecutive errors for backoff
         pidx = 0
 
-        while not self._stop.is_set() and not self.purchased:
+        while not self._stop_event.is_set() and not self.purchased:
             current_raw = proxies_list[pidx % len(proxies_list)]
             self._cur_proxy = current_raw
             proxy = parse_proxy(current_raw)
@@ -1201,7 +1220,7 @@ class TaskWorker(threading.Thread):
                             pass
                     rebuild = False
                     try:
-                        while not self._stop.is_set() and not self.purchased:
+                        while not self._stop_event.is_set() and not self.purchased:
                             # Re-read live-editable fields each cycle so an edit made
                             # while the task is running applies without a restart.
                             # (account/proxies need a context rebuild → restart only.)
@@ -1230,7 +1249,7 @@ class TaskWorker(threading.Thread):
                                 # Watch the page; resume the moment it's cleared (auto or manual).
                                 solved = False
                                 waited = 0
-                                while waited < 180 and not self._stop.is_set():
+                                while waited < 180 and not self._stop_event.is_set():
                                     if not check_for_captcha(page):
                                         solved = True
                                         break
@@ -1319,7 +1338,7 @@ class TaskWorker(threading.Thread):
                             pass
                     if not rebuild:
                         break
-                    if self._stop.is_set():
+                    if self._stop_event.is_set():
                         break
                     # relogin happened — loop again on the SAME proxy.
             except Exception as e:
@@ -1342,13 +1361,13 @@ class TaskWorker(threading.Thread):
         seen = set()
         first = True
         self.log(f"keyword monitor: '{keyword}'" + (f" within {scope_url}" if scope_url else " (all Lazada)"))
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 with sync_playwright() as p:
                     browser, context = _new_context(p, proxy, session_file)
                     page = context.new_page()
                     try:
-                        while not self._stop.is_set():
+                        while not self._stop_event.is_set():
                             self.status("scanning")
                             res, items = keyword_check(page, keyword, seen, self.log, scope_url)
                             if res == "captcha":
@@ -1356,7 +1375,7 @@ class TaskWorker(threading.Thread):
                                 notify(f"⚠️ *CAPTCHA* on *{name}* (keyword) — solve in window.")
                                 handle_captcha(page, self.log)
                                 waited = 0
-                                while waited < 180 and not self._stop.is_set():
+                                while waited < 180 and not self._stop_event.is_set():
                                     if not check_for_captcha(page):
                                         break
                                     time.sleep(2); waited += 2
@@ -1388,7 +1407,7 @@ class TaskWorker(threading.Thread):
         purchased = set()
         last_unknown = {}
         self.log(f"watch list: {len(urls)} URLs (lightweight HTTP poll)")
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             active = [u for u in urls if u not in purchased]
             if not active:
                 self.status("all done ✓")
@@ -1417,7 +1436,7 @@ class TaskWorker(threading.Thread):
                     last_unknown[u] = now
                     candidates.append(u)  # HTTP couldn't read it — verify in browser occasionally
 
-            if candidates and not self._stop.is_set():
+            if candidates and not self._stop_event.is_set():
                 if alert_only:
                     for u in candidates:
                         self.log(f"possible stock: {u}")
@@ -1437,7 +1456,7 @@ class TaskWorker(threading.Thread):
                 page = context.new_page()
                 try:
                     for u in candidates:
-                        if self._stop.is_set():
+                        if self._stop_event.is_set():
                             break
                         self.status("DROP — verifying")
                         result, buy = check_stock(page, u, "", self.log)
@@ -1446,7 +1465,7 @@ class TaskWorker(threading.Thread):
                             notify(f"⚠️ *CAPTCHA* on *{name}* (watch list) — solve in window.")
                             handle_captcha(page, self.log)
                             w = 0
-                            while w < 180 and not self._stop.is_set():
+                            while w < 180 and not self._stop_event.is_set():
                                 if not check_for_captcha(page):
                                     break
                                 time.sleep(2); w += 2
@@ -1506,7 +1525,8 @@ class TaskWorker(threading.Thread):
         last_verify = 0
         unknowns = 0
         pidx = 0
-        while not self._stop.is_set() and not self.purchased:
+        strikes = {}  # poll proxy -> consecutive failed connections
+        while not self._stop_event.is_set() and not self.purchased:
             # live-editable re-read (edits while running apply on the next poll)
             interval = float(self.task.get("interval", 8) or 8)
             variant = (self.task.get("variant") or "").strip()
@@ -1522,6 +1542,25 @@ class TaskWorker(threading.Thread):
                     used_proxy = poll_pool[pidx % len(poll_pool)]
                     pidx += 1
                     r = http_stock(url, None, used_proxy)  # anonymous through the proxy
+                    if r == "proxy_error":
+                        # Lazada unreachable through this proxy (dead host, bad login,
+                        # overloaded exit). Don't go blind: poll this cycle on the real
+                        # IP instead. Two misses in a row while the real IP DOES get
+                        # through retire the proxy — a blip in your own connection
+                        # fails both, so it never strips a healthy pool.
+                        cookies = session_cookies(session_file)
+                        r = http_stock(url, cookies)
+                        if r != "unknown":
+                            strikes[used_proxy] = strikes.get(used_proxy, 0) + 1
+                            if strikes[used_proxy] >= 2:
+                                poll_pool = [p for p in poll_pool if p != used_proxy]
+                                self.log(f"poll proxy isn't connecting, dropping it "
+                                         f"({mask_proxy(used_proxy)}); {len(poll_pool)} IP(s) left")
+                                if not poll_pool:
+                                    self.log("no working poll proxies left — polling on your real IP")
+                        used_proxy = None  # this cycle's result came from the real IP
+                    else:
+                        strikes.pop(used_proxy, None)
                 else:
                     cookies = session_cookies(session_file)  # picks up a re-login automatically
                     r = http_stock(url, cookies)
@@ -1541,11 +1580,15 @@ class TaskWorker(threading.Thread):
                 self._wait(1)
                 continue
             now = time.time()
-            # Warn once if HTTP can't read this product even authenticated — normal
-            # mode polls far faster than the 45s browser fallback for such URLs.
+            # Warn once if HTTP can't read this product — normal mode polls far
+            # faster than the 45s browser fallback for such URLs.
             if r == "unknown":
                 unknowns += 1
-                if unknowns == 5:
+                if unknowns == 5 and used_proxy:
+                    self.log("fast-product: HTTP can't read this product's stock through the proxies "
+                             "(their polls are logged-out) — remove the task's proxies to poll as "
+                             "your logged-in session, or untick Fast product")
+                elif unknowns == 5:
                     self.log("fast-product: HTTP can't read this product's stock — "
                              "consider unticking Fast product for it (normal mode detects sooner)")
             else:
@@ -1582,7 +1625,7 @@ class TaskWorker(threading.Thread):
                         notify(f"⚠️ *CAPTCHA* on *{name}* — solve it in the browser window.")
                         handle_captcha(page, self.log)
                         w = 0
-                        while w < 180 and not self._stop.is_set():
+                        while w < 180 and not self._stop_event.is_set():
                             if not check_for_captcha(page):
                                 break
                             time.sleep(2); w += 2
@@ -1638,7 +1681,7 @@ class TaskWorker(threading.Thread):
     def _wait(self, seconds):
         seconds = seconds + random.uniform(0, max(0.0, seconds * 0.25))
         end = time.time() + seconds
-        while time.time() < end and not self._stop.is_set():
+        while time.time() < end and not self._stop_event.is_set():
             time.sleep(0.2)
 
 
@@ -1656,7 +1699,7 @@ def self_test(url, log):
                 page.wait_for_timeout(2500)
                 for label, sel in {"buy/cart buttons": SEL["buy_cart_btns"],
                                    "account trigger": SEL["account_trigger"],
-                                   "sku selector": SEL["sku_selector"]}.items():
+                                   "sku selector (only on items with options)": SEL["sku_selector"]}.items():
                     ok = page.query_selector(sel) is not None
                     report.append(f"{'✓' if ok else '✗'} {label} ({sel})")
                 report.append(f"logged in: {is_logged_in(page)}")
@@ -1723,8 +1766,10 @@ def warm_session(account, session_file, url, log):
 def selector_health(url, log):
     """Headless check that Lazada's critical PDP selectors still resolve — an
     early-warning that Lazada changed their layout and the bot may need updating.
-    Returns (ok, missing). On any error returns (True, []) so we never false-alarm."""
-    critical = {"buy/cart button": SEL["buy_cart_btns"], "sku selector": SEL["sku_selector"]}
+    Returns (ok, missing). On any error returns (True, []) so we never false-alarm.
+    Only the buy/cart button is critical: items without options (most sealed
+    products) have no variant picker at all, so its absence proves nothing."""
+    critical = {"buy/cart button": SEL["buy_cart_btns"]}
     missing = []
     try:
         with sync_playwright() as p:
@@ -1742,6 +1787,8 @@ def selector_health(url, log):
                 for label, sel in critical.items():
                     if page.query_selector(sel) is None:
                         missing.append(label)
+                if not missing and page.query_selector(SEL["sku_selector"]) is None:
+                    log("selector health: no variant picker on this page — fine if the item has no options")
             finally:
                 browser.close()
     except Exception as e:

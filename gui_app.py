@@ -953,15 +953,24 @@ class MainWindow(QMainWindow):
             label = "" if choice.startswith("(default") else choice
         proxy_raw = ""
         if self.proxies:
-            opts = ["(no proxy — my real IP)"] + [engine.mask_proxy(p) for p in self.proxies]
+            opts = ["(no proxy — my real IP)"] + [self._proxy_label(p) for p in self.proxies]
             pick, ok = QInputDialog.getItem(
                 self, "Login", "Log in through which connection?\n"
                                 "(the login is saved for this account+proxy pair)", opts, 0, False)
             if not ok:
                 return
-            if not pick.startswith("(no proxy"):
-                proxy_raw = self.proxies[opts.index(pick) - 1]
+            idx = opts.index(pick)
+            if idx > 0:
+                proxy_raw = self.proxies[idx - 1]
         self.do_login(label, proxy_raw)
+
+    def _proxy_label(self, raw):
+        """Masked proxy plus its line number in the pool. Proxies from one provider
+        usually share host:port, so with the credentials hidden they'd all read the
+        same and couldn't be told apart."""
+        if raw in self.proxies:
+            return f"#{self.proxies.index(raw) + 1} {engine.mask_proxy(raw)}"
+        return engine.mask_proxy(raw)
 
     def do_login(self, account_label="", proxy_raw=""):
         if self._login_busy:
@@ -976,10 +985,10 @@ class MainWindow(QMainWindow):
         session_file = engine.session_path(account_label, proxy_raw)
         self._login_busy = True
         self.login_btn.setEnabled(False)
-        via = f" via {engine.mask_proxy(proxy_raw)}" if proxy_raw else ""
+        via = f" via {self._proxy_label(proxy_raw)}" if proxy_raw else ""
         self.login_lbl.setText(f"Logging in ({account_label or 'default'}{via})…")
         self.log_line("login", f"logging in: account={account_label or 'default'}"
-                               f"{', proxy=' + engine.mask_proxy(proxy_raw) if proxy_raw else ''}")
+                               f"{', proxy=' + self._proxy_label(proxy_raw) if proxy_raw else ''}")
         self._set_login_dot("#faa61a")  # amber while in progress
 
         def get_otp():
@@ -1097,10 +1106,11 @@ class MainWindow(QMainWindow):
 
     def test_proxies(self, proxies):
         def run():
-            for px in proxies:
+            for i, px in enumerate(proxies, 1):
                 ok, msg = engine.test_proxy(px)
-                # never log proxy credentials — bot.log is plaintext on disk
-                self.bridge.log.emit("proxy-test", f"{'✓' if ok else '✗'} {engine.mask_proxy(px)} — {msg}")
+                # never log proxy credentials — bot.log is plaintext on disk. The
+                # line number tells same-host proxies apart once they're masked.
+                self.bridge.log.emit("proxy-test", f"{'✓' if ok else '✗'} #{i} {engine.mask_proxy(px)} — {msg}")
         threading.Thread(target=run, daemon=True).start()
 
     def manage_webhook(self):

@@ -4,6 +4,7 @@ Run: `pytest -q`. These cover the parsing/crypto/versioning helpers that used to
 be hand-verified before each release, so regressions get caught in CI.
 """
 import json
+import time
 
 import engine
 import notifier
@@ -40,6 +41,7 @@ def test_is_lazada_host():
     assert engine._is_lazada_host("https://pages.lazada.com/x")
     assert not engine._is_lazada_host("https://evil.com")
     assert not engine._is_lazada_host("https://lazada.sg.evil.com/x")
+    assert not engine._is_lazada_host("https://evillazada.sg/x")      # look-alike, not a subdomain
     assert not engine._is_lazada_host("not a url")
 
 
@@ -60,6 +62,7 @@ def test_session_cookies_filters_non_lazada(tmp_path):
     secure_store.save(p, {"cookies": [
         {"name": "lzd_sid", "value": "SECRET", "domain": ".lazada.sg", "path": "/"},
         {"name": "evil", "value": "NOPE", "domain": ".evil.com", "path": "/"},
+        {"name": "lookalike", "value": "NOPE", "domain": ".evillazada.sg", "path": "/"},
         {"name": "lzdcom", "value": "OK", "domain": ".lazada.com", "path": "/"},
     ], "origins": []})
     got = engine.session_cookies(p)
@@ -105,6 +108,83 @@ def test_http_stock_caches_resolved_short_link(monkeypatch):
     assert engine.http_stock(short) == "in_stock"
     assert calls == [real]                  # warm: straight to the product page
     engine._RESOLVED.pop(short, None)
+
+
+def test_http_stock_never_follows_a_short_link_off_lazada(monkeypatch):
+    """A stub pointing at a look-alike host must not be fetched, trusted or cached."""
+    short = "https://s.lazada.sg/s.EVIL"
+    lookalike = "https://www.lazada.sg.evil.com/products/thing-i1-s2.html"
+    calls = []
+
+    class Resp:
+        def __init__(self, url, text):
+            self.url, self.text, self.ok = url, text, True
+
+    def fake_get(u, **kw):
+        calls.append(u)
+        return Resp(u, f'stub <a href="{lookalike}">x</a>' if u == short else "add to cart")
+
+    monkeypatch.setattr(engine.requests, "get", fake_get)
+    engine._RESOLVED.pop(short, None)
+    assert engine.http_stock(short) == "unknown"
+    assert calls == [short] and short not in engine._RESOLVED
+
+
+def test_http_stock_blames_the_proxy_only_when_one_is_used(monkeypatch):
+    import requests
+
+    def unreachable(u, **kw):
+        raise requests.exceptions.ProxyError("Unable to connect to proxy")
+
+    monkeypatch.setattr(engine.requests, "get", unreachable)
+    url = "https://www.lazada.sg/products/x-i1.html"
+    assert engine.http_stock(url, None, "dead.host:8603:user:pass") == "proxy_error"
+    assert engine.http_stock(url) == "unknown"                        # direct: just a missed poll
+    assert engine.http_stock(url, None, "not-a-proxy") == "proxy_error"  # never silently goes direct
+
+
+# ─── engine: task worker ──────────────────────────────────────────
+
+def test_task_worker_can_be_joined_after_it_stops():
+    """TaskWorker once shadowed Thread._stop with an Event, so join()/is_alive()
+    raised TypeError after the thread finished."""
+    w = engine.TaskWorker({"name": "T", "url": "https://www.lazada.sg/products/x-i1.html"},
+                          lambda *a: None, lambda *a: None)
+    w.stop()      # stopped before starting: run() returns without opening a browser
+    w.start()
+    w.join(10)
+    assert not w.is_alive()
+
+
+def test_fast_product_drops_a_dead_poll_proxy_without_going_blind(monkeypatch):
+    """A proxy that can't connect must not blind detection: that cycle polls on the
+    real IP instead, and after two misses the proxy is dropped — not blamed on the
+    product, and never treated as a drop."""
+    dead, good = "dead.host:8603:user:secretpw", "good.host:8603:user:pw"
+    calls = []
+
+    def fake_stock(url, cookies=None, proxy=None):
+        calls.append(proxy)
+        return "proxy_error" if proxy == dead else "out_of_stock"
+
+    monkeypatch.setattr(engine, "http_stock", fake_stock)
+    monkeypatch.setattr(engine, "session_cookies", lambda f: [])
+    logs, statuses = [], []
+    task = {"name": "T", "url": "https://www.lazada.sg/products/x-i1.html", "interval": 0.05,
+            "fast_product": True, "proxies": [dead, good]}
+    w = engine.TaskWorker(task, lambda n, m: logs.append(m), lambda n, s: statuses.append(s))
+    w.start()
+    deadline = time.time() + 15
+    while time.time() < deadline and statuses.count("out of stock (fast http)") < 8:
+        time.sleep(0.05)
+    w.stop()
+    w.join(10)
+    assert statuses.count("out of stock (fast http)") >= 8, (statuses, logs)
+    assert calls.count(dead) == 2                          # two misses, then retired
+    assert calls.count(None) == 2                          # each miss polled on the real IP
+    assert sum("isn't connecting, dropping it" in m for m in logs) == 1, logs
+    assert "DROP — verifying" not in statuses
+    assert not any("can't read this product" in m or "secretpw" in m for m in logs), logs
 
 
 def test_mask_proxy_hides_credentials():

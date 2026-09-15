@@ -1,3 +1,75 @@
+## v2.9.22 — bug fixes + security hardening
+- **Login picks the proxy you choose.** Proxies from one provider share the same
+  host:port, so once passwords were masked (v2.9.18) every entry in the Login picker looked
+  identical and the login always went through the first one. Entries are now numbered
+  (#1, #2, … in the same order as 🌐 Proxies), and the login log and proxy test results
+  show the number too.
+- **Dead poll proxies no longer blind Fast product.** If a proxy can't connect (expired
+  plan, wrong password, provider down), that poll is redone on your real IP straight away,
+  and a proxy that fails twice in a row is dropped from the rotation. Before, a dead pool
+  left only a slow browser check every ~45s, and the log wrongly blamed the product
+  ("HTTP can't read this product's stock").
+- **No more false "Selector health check FAILED".** Items without options have no variant
+  picker, and the check was treating that as a Lazada layout change. Only the buy/cart
+  button is required now.
+- **Security hardening:** a short link is only ever followed to a real Lazada address (a
+  look-alike such as `lazada.sg.evil.com` is ignored), and saved-login cookies are matched
+  to Lazada domains exactly. `cryptography` is updated to 50.0.0 for CVE-2026-69247 — the
+  signed-update check doesn't use the affected feature, so this is precautionary; existing
+  installs can pick it up with `pip install -r requirements.txt`.
+- Fixed a latent crash when checking whether a finished task was still running (found in
+  testing; normal use wasn't affected).
+- The in-app changelog now includes v2.9.17–v2.9.21, which were missing from it.
+
+## v2.9.21 — fewer, clearer task options
+Two redundant checkboxes are gone (6 → 4). Your existing tasks are migrated automatically.
+- **"Fast monitor" removed** — it did a cheap HTTP pre-check but still kept a browser open
+  the whole time. **Fast product** does the same check with *no* browser at all, so it
+  simply replaces it.
+- **"Poll via proxies" removed** — it is now implied: in Fast product mode checkout always
+  runs on your real IP, so any proxies you give the task can only mean "use these for
+  polling". Tasks that had the option keep their behaviour (the proxy pool is copied onto
+  the task).
+- Remaining options: **Alert only**, **Dry run**, **⚡ Turbo**, **⚡⚡ Fast product**.
+
+## v2.9.20 — split mode: poll via proxies, check out on your real IP
+- **🌐 Poll via proxies** (Fast product only): detection polls rotate across your proxy
+  pool while **checkout still runs on your real IP**. Your CAPTCHAs come from IP-level
+  rate limiting on monitoring, so spreading that load lifts how many tasks you can run —
+  and because proxies measured ~7x slower, keeping checkout on the real IP preserves
+  full buying speed.
+- Proxy polls go out **anonymously** (no session cookies), so your account is never seen
+  from a proxy IP and can't be flagged for hopping addresses.
+- **Flagged proxy IPs are retired automatically.** A CAPTCHA from a proxy poll means that
+  exit IP is blocked by Lazada, not that the item dropped — the bot drops that IP from the
+  rotation and carries on, falling back to your real IP if all of them go bad.
+
+## v2.9.19 — fix false "Login FAILED" on slow connections
+- After you enter the OTP, the bot now **waits up to 60s for the login to land**, polling
+  instead of checking once after ~6s. On a slow or proxied connection the post-OTP redirect
+  can take longer than that, so a login that actually succeeded was being reported as
+  "Login FAILED — still logged-out". A CAPTCHA appearing during that wait is handled too,
+  and the failure message now says what to check.
+
+## v2.9.18 — proxy safety + account/proxy pairing
+- **Proxy passwords no longer written to the log.** `bot.log` is plaintext on disk and
+  was recording full proxy credentials; they are now masked everywhere (log, Discord,
+  the login picker) as `host:port:***:***`.
+- **Clear warning for an unpaired account+proxy.** Logins are saved per **account+proxy
+  pair** — running an account through a proxy it has never logged in on starts logged-out
+  and forces a re-login from a new IP (a prime CAPTCHA trigger). Instead of a confusing
+  "session expired", the task now says up front which pair has no saved login and what
+  to do about it.
+- **Login can now pick the proxy.** If you have proxies configured, Login asks which
+  connection to use, so you can create the account+proxy login a proxied task needs.
+
+## v2.9.17 — session warm-up
+- **🔥 Warm button** — run it before a drop and the bot checks every saved account: is it
+  still logged in, refreshes its cookies, and visits the product page so the account has
+  recent normal activity. You get a Discord + desktop summary of which accounts are
+  **ready** and which need a re-login — while you still have time to do the OTP.
+  Previously an expired session was only discovered when the task ran, i.e. at drop time.
+
 ## v2.9.16 — faster, more reliable HTTP polling
 - **Short links are resolved once, then polled directly.** A `s.lazada.sg` link used to
   cost two requests every single poll (stub page, then the real product page) — slow, and
