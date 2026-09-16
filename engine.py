@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.22"
+VERSION = "2.9.23"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -289,6 +289,19 @@ def is_logged_in(page):
         return False
     except Exception:
         return False
+
+
+def parse_start_at(text):
+    """Scheduled start: 'HH:MM' or 'HH:MM:SS' (24h) -> (hour, minute, second).
+    Raises ValueError with a readable reason, so a typo'd drop time is obvious
+    instead of quietly starting the task now."""
+    parts = [p.strip() for p in (text or "").strip().split(":")]
+    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
+        raise ValueError("use HH:MM or HH:MM:SS on a 24h clock, e.g. 13:05 or 13:05:30")
+    hh, mm, ss = (int(p) for p in (parts + ["0"])[:3])
+    if not (hh < 24 and mm < 60 and ss < 60):
+        raise ValueError(f"{text!r} isn't a real time of day (24h clock)")
+    return hh, mm, ss
 
 
 def _first(page, selectors):
@@ -1116,18 +1129,27 @@ class TaskWorker(threading.Thread):
         start_at = (self.task.get("start_at") or "").strip()
         if not start_at:
             return
+        import datetime as dt
         try:
-            import datetime as dt
-            hh, mm = [int(x) for x in start_at.split(":")]
-            now = dt.datetime.now()
-            target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-            if target <= now:
-                target += dt.timedelta(days=1)
-            self.status(f"scheduled {start_at}")
-            while not self._stop_event.is_set() and dt.datetime.now() < target:
-                time.sleep(1)
-        except Exception as e:
-            self.log(f"bad start time {start_at!r}: {e}")
+            hh, mm, ss = parse_start_at(start_at)
+        except ValueError as e:
+            self.log(f"bad start time {start_at!r}: {e} — starting now instead")
+            return
+        now = dt.datetime.now()
+        target = now.replace(hour=hh, minute=mm, second=ss, microsecond=0)
+        if target <= now:
+            target += dt.timedelta(days=1)
+        wait = (target - now).total_seconds()
+        self.status(f"scheduled {start_at}")
+        self.log(f"waiting until {target.strftime('%H:%M:%S')} "
+                 f"({int(wait // 3600)}h {int(wait % 3600 // 60)}m {int(wait % 60)}s from now)")
+        # Fine-grained wait: a to-the-second start must fire on that second, and
+        # Stop has to stay responsive while waiting.
+        while not self._stop_event.is_set():
+            remaining = (target - dt.datetime.now()).total_seconds()
+            if remaining <= 0:
+                break
+            time.sleep(min(remaining, 0.2))
 
     def _wait_for_relogin(self, session_file, prev_mtime):
         self.status("session expired — re-login needed")

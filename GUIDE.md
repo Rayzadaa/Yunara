@@ -57,7 +57,8 @@ The bottom **status bar** shows live counts: running · idle · purchased · err
 - **Quantity** — keep within Lazada's per-account limit (see tips).
 - **Check interval (s)** — how often to poll (see tips for sane values).
 - **Max price** — abort the buy if the order total exceeds this (scalper/glitch guard).
-- **Scheduled start** — `HH:MM` (24h); the task waits until then to begin.
+- **Scheduled start** — `HH:MM` or `HH:MM:SS` (24h); the task waits until then to begin.
+  Use seconds for a known drop time (e.g. `13:00:00`) so polling starts on the second.
 - **Payment method** — see §6.
 - **Proxies** — one per line; rotates/fails over. **Usually leave blank** (see tips).
 - **Account** — which logged-in account to buy with.

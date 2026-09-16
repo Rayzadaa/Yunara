@@ -195,7 +195,8 @@ class TaskDialog(QDialog):
         self.interval = QSpinBox(); self.interval.setRange(2, 600); self.interval.setValue(int(t.get("interval", 8)))
         self.maxprice = QDoubleSpinBox(); self.maxprice.setRange(0, 100000); self.maxprice.setDecimals(2)
         self.maxprice.setValue(float(t.get("max_price", 0))); self.maxprice.setSpecialValueText("no limit")
-        self.start_at = QLineEdit(t.get("start_at", "")); self.start_at.setPlaceholderText("HH:MM (24h) — blank = now")
+        self.start_at = QLineEdit(t.get("start_at", ""))
+        self.start_at.setPlaceholderText("HH:MM or HH:MM:SS (24h) — blank = start now")
         self.payment = QComboBox(); self.payment.setEditable(True)
         for pm in PAYMENTS:
             self.payment.addItem(pm)
@@ -1036,6 +1037,19 @@ class MainWindow(QMainWindow):
         it = self.table.item(r, C_NAME)
         return it.text() if it else None
 
+    def _start_at_ok(self, t):
+        """A typo'd drop time would otherwise only surface in the log at start —
+        by which time the drop is missed."""
+        if not t.get("start_at"):
+            return True
+        try:
+            engine.parse_start_at(t["start_at"])
+            return True
+        except ValueError as e:
+            QMessageBox.warning(self, "Scheduled start",
+                                f"{e}\n\nLeave it blank to start as soon as you hit Start.")
+            return False
+
     def add_task(self):
         dlg = TaskDialog(self, self.proxies, self.accounts)
         if dlg.exec():
@@ -1044,6 +1058,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Missing", "Name and a URL, Keyword, or Watch list are required."); return
             if any(x["name"] == t["name"] for x in self.tasks):
                 QMessageBox.warning(self, "Duplicate", "That name exists."); return
+            if not self._start_at_ok(t):
+                return
             self.tasks.append(t); self._save(); self._refresh_table()
 
     def edit_task(self):
@@ -1057,6 +1073,8 @@ class MainWindow(QMainWindow):
         if not dlg.exec():
             return
         new = dlg.get_task()
+        if not self._start_at_ok(new):
+            return
         if running and new["name"] != name:
             QMessageBox.information(self, "Rename while running",
                                    "Stop the task to rename it — keeping the current name for now.")

@@ -143,6 +143,42 @@ def test_http_stock_blames_the_proxy_only_when_one_is_used(monkeypatch):
     assert engine.http_stock(url, None, "not-a-proxy") == "proxy_error"  # never silently goes direct
 
 
+# ─── engine: scheduled start ──────────────────────────────────────
+
+def test_parse_start_at():
+    assert engine.parse_start_at("13:05") == (13, 5, 0)
+    assert engine.parse_start_at("13:05:30") == (13, 5, 30)
+    assert engine.parse_start_at(" 09:00:09 ") == (9, 0, 9)
+    assert engine.parse_start_at("0:0:0") == (0, 0, 0)
+    for bad in ("", "1300", "25:00", "13:60", "13:05:60", "13:05:30:1", "1pm", "13:-5", "13:xx"):
+        try:
+            engine.parse_start_at(bad)
+            raise AssertionError(f"{bad!r} should be rejected")
+        except ValueError:
+            pass
+
+
+def test_scheduled_start_waits_for_the_second(monkeypatch):
+    """A drop time with seconds must start ON that second, not up to a minute early."""
+    import datetime as dt
+    target = dt.datetime.now().replace(microsecond=0) + dt.timedelta(seconds=2)
+    started = []
+    task = {"name": "T", "url": "https://www.lazada.sg/products/x-i1.html",
+            "start_at": target.strftime("%H:%M:%S"), "fast_product": True, "interval": 5}
+    monkeypatch.setattr(engine, "session_cookies", lambda f: [])
+    monkeypatch.setattr(engine, "http_stock", lambda *a, **k: started.append(time.time()) or "out_of_stock")
+    w = engine.TaskWorker(task, lambda n, m: None, lambda n, s: None)
+    w.start()
+    deadline = time.time() + 10
+    while time.time() < deadline and not started:
+        time.sleep(0.05)
+    w.stop()
+    w.join(10)
+    assert started, "task never started"
+    lag = started[0] - target.timestamp()
+    assert 0 <= lag < 0.5, f"started {lag:+.2f}s off the scheduled second"
+
+
 # ─── engine: task worker ──────────────────────────────────────────
 
 def test_task_worker_can_be_joined_after_it_stops():

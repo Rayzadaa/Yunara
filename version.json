@@ -1,7 +1,7 @@
 {
-  "version": "2.9.22",
+  "version": "2.9.23",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "8bb86499e880919509c155501483c94c5caf1599407c6855b26b3dd1077e9a14",
-  "signature": "b26d35b5d52921f2065d51a6b25c6fbb8fd692f2c2db4a8afd8436bcdb1a7ee0936c7b8041b6187b7343666a61fdb93a5caa3e9f4a1c9b4b05f8cc80f975f005",
-  "notes": "Bug fixes: Login now uses the proxy you pick (same-provider proxies all looked identical), dead poll proxies no longer blind Fast product, and no more false selector-health alarms on items without options. Plus security hardening and a cryptography update."
+  "sha256": "79dd64081ae5a5a5757f4f8cd09a9b1ef3b185eae48c22e34c89421c518191ff",
+  "signature": "6b5bede7c27629f57635223b7eef32e36ce3367aaa4d7bee6bc22408f2d04ecc95e56b035e3d76b3cbf4204c52a0bd74443d1e635d7b5fb7de3a309cead4b10a",
+  "notes": "Scheduled start now takes seconds (HH:MM:SS), so a task can begin exactly on a known drop time, and a mistyped start time is caught when you save the task instead of at drop time."
 }

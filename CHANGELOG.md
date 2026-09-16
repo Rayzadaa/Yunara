@@ -1,3 +1,12 @@
+## v2.9.23 — scheduled start to the second
+- **Scheduled start now accepts seconds**: `HH:MM:SS` as well as `HH:MM`, so a task can
+  begin exactly on a known drop time (e.g. `13:00:00`) instead of anywhere inside that
+  minute. The wait is fine-grained, so polling starts on the second — the log also shows
+  the target time and how long it will wait.
+- **A mistyped start time is caught when you save the task**, with the reason. Before, a
+  bad value only showed up in the log at start time — and the task began immediately,
+  which for a timed drop is exactly when you don't want it to.
+
 ## v2.9.22 — bug fixes + security hardening
 - **Login picks the proxy you choose.** Proxies from one provider share the same
   host:port, so once passwords were masked (v2.9.18) every entry in the Login picker looked
