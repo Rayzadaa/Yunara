@@ -1,7 +1,7 @@
 {
-  "version": "2.9.24",
+  "version": "2.9.25",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "26f10117531cf03d6e9e24fd3eee06abe3dbb22b5c4c25beb6c983e0aba0ba22",
-  "signature": "4f4b2f877236e0d8c06faf5ae83e8e48f262e4b91c33b84cd87344fca0639f405aaa1c530248a48d118160dd108eebc83498a4855a5806004c67b50d589eab07",
-  "notes": "Fixes PayNow checkouts stalling on Lazada's new \"Confirm Selection\" popup (orders were going through with PayNow unconfirmed), and a bug that could misread a placed PayNow order as \"not placed\" and order twice."
+  "sha256": "1ce84a9357e57e873b3a4b46cb220485b29c873ac5d237675c489411faebfba8",
+  "signature": "11d0202938b85a3f38592ce2eb25433e4f3fc70a7e8217a74b884a88092935ae6162cb128e89f1d04435a87b33ae13f1a3284dbfe30c42c6f7d82e848a21590d",
+  "notes": "Handles Lazada's \"unable to process your order\" page: one TRY AGAIN, then that account's checkouts pause 10 min with a Discord alert (a fresh login resumes them). One checkout at a time per account, and a new Payment column in the task table."
 }

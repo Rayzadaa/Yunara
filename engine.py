@@ -4,6 +4,7 @@ Each task runs in its own thread with its own Playwright browser context
 (+ optional proxy). Sessions are keyed per (account, proxy) so multi-account
 and proxied checkout both work.
 """
+import contextlib
 import hashlib
 import math
 import os
@@ -25,7 +26,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.24"
+VERSION = "2.9.25"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -763,6 +764,63 @@ def _click_confirm(page, log):
     return False
 
 
+# ─── Per-account checkout coordination ────────────────────────────
+
+# Lazada sometimes answers a checkout with "Sorry, we are unable to process your
+# order. If this issue persists, please sign out and then sign in again." That's the
+# ACCOUNT being refused (throttling, unpaid orders, a stale login), not the product —
+# so instead of retrying straight away, every task on that account pauses checkouts.
+REFUSED_TEXT = "unable to process your order"
+REFUSED_PAUSE_S = 600
+_ACCOUNT_PAUSE = {}     # account -> (resume_at, session file in use, its mtime then)
+_CHECKOUT_LOCKS = {}    # account -> Lock: one checkout at a time per Lazada account
+_ACCOUNT_GUARD = threading.Lock()
+
+
+def _mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except Exception:
+        return 0
+
+
+def pause_account_checkouts(account, session_file, seconds=REFUSED_PAUSE_S):
+    """Pause checkouts on `account`. Returns True if it wasn't already paused, so
+    the caller alerts once per pause rather than once per task."""
+    with _ACCOUNT_GUARD:
+        cur = _ACCOUNT_PAUSE.get(account or "")
+        fresh = not cur or cur[0] <= time.time()
+        _ACCOUNT_PAUSE[account or ""] = (time.time() + seconds, session_file, _mtime(session_file))
+    return fresh
+
+
+def checkout_pause(account):
+    """(seconds left, pause id) while `account`'s checkouts are paused, else (0, None).
+    A fresh login — the session file that was in use changing — lifts it at once."""
+    with _ACCOUNT_GUARD:
+        cur = _ACCOUNT_PAUSE.get(account or "")
+        if not cur:
+            return (0, None)
+        resume_at, session_file, mtime = cur
+        left = resume_at - time.time()
+        if left <= 0 or _mtime(session_file) != mtime:
+            del _ACCOUNT_PAUSE[account or ""]
+            return (0, None)
+        return (left, resume_at)
+
+
+def _checkout_lock(account):
+    with _ACCOUNT_GUARD:
+        return _CHECKOUT_LOCKS.setdefault(account or "", threading.Lock())
+
+
+def _checkout_refused(page):
+    try:
+        return REFUSED_TEXT in page.inner_text("body").lower()
+    except Exception:
+        return False
+
+
 def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=False):
     t0 = time.time()
     try:
@@ -773,12 +831,40 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
         # Wait for the checkout to be actionable — event-driven (fires the instant
         # the button/label renders) instead of serializing the whole page body
         # every 0.5s, which was the main source of checkout latency.
+        # (Lazada's refusal page counts as "ready" too, so it's spotted at once instead
+        # of after the full 12s wait.)
+        ready = re.compile(r"Place Order|Lazada Wallet|" + REFUSED_TEXT, re.I)
         try:
-            page.get_by_text(re.compile(r"Place Order|Lazada Wallet", re.I)).first.wait_for(
-                state="visible", timeout=12000)
+            page.get_by_text(ready).first.wait_for(state="visible", timeout=12000)
         except Exception:
             pass
         log(f"⏱ checkout ready {time.time() - t0:.1f}s")
+
+        if _checkout_refused(page):
+            # "Sorry, we are unable to process your order. If this issue persists, please
+            # sign out and then sign in again." Give Lazada's own TRY AGAIN one go —
+            # hammering an account that's refusing orders only makes it worse.
+            log('Lazada refused the checkout ("unable to process your order") — trying its TRY AGAIN once')
+            human_pause(1.5, 2.5)
+            try:
+                page.get_by_text(re.compile(r"^\s*try again\s*$", re.I)).first.click(timeout=3000)
+            except Exception:
+                try:
+                    page.reload(wait_until="domcontentloaded", timeout=20000)
+                except Exception:
+                    pass
+            try:  # the old error text must go before the reloaded page can be judged
+                page.get_by_text(re.compile(REFUSED_TEXT, re.I)).first.wait_for(state="hidden", timeout=8000)
+            except Exception:
+                pass
+            try:
+                page.get_by_text(ready).first.wait_for(state="visible", timeout=12000)
+            except Exception:
+                pass
+            if _checkout_refused(page):
+                log("still refused after TRY AGAIN")
+                return "refused"
+            log("TRY AGAIN worked — continuing checkout")
 
         if check_for_captcha(page):
             if not handle_captcha(page, log):
@@ -1190,6 +1276,7 @@ class TaskWorker(threading.Thread):
         self.purchased = False
         self._account = ""
         self._cur_proxy = ""
+        self._paused_ping = None  # which account pause we've already reported stock for
 
     def log(self, m):
         self.on_log(self.task["name"], m)
@@ -1225,6 +1312,88 @@ class TaskWorker(threading.Thread):
             if remaining <= 0:
                 break
             time.sleep(min(remaining, 0.2))
+
+    # ─── checkout coordination (per Lazada account) ─────────────────
+
+    def _checkout_paused(self, account, url):
+        """While Lazada is refusing this account's orders, don't buy — but report the
+        stock once per pause so it can still be bought by hand."""
+        left, pause_id = checkout_pause(account)
+        if not left:
+            return False
+        self.status(f"IN STOCK — checkout paused ({max(1, round(left / 60))} min)")
+        if self._paused_ping != pause_id:
+            self._paused_ping = pause_id
+            notifier.send_event(
+                "🟢 In stock — checkout paused", url=url, color=0xE67E22, ping=True,
+                description=(f"{self.task['name']}: Lazada was refusing orders on account "
+                             f"*{account or 'default'}*, so the bot isn't buying right now. "
+                             "Buy it manually, or log in again to resume."))
+        return True
+
+    @contextlib.contextmanager
+    def _checkout_slot(self, account, url):
+        """Yields True when this task may check out now: never while the account's
+        checkouts are paused, and one checkout at a time per account (two Buy Nows at
+        once on the same account can knock each other's checkout over)."""
+        if self._checkout_paused(account, url):
+            yield False
+            return
+        lock = _checkout_lock(account)
+        if not lock.acquire(blocking=False):
+            self.status("waiting for another checkout")
+            end = time.time() + 90
+            while not lock.acquire(timeout=0.25):
+                if self._stop_event.is_set() or time.time() > end:
+                    yield False
+                    return
+        try:
+            yield not self._checkout_paused(account, url)  # paused while we waited?
+        finally:
+            lock.release()
+
+    def _on_refused(self, account, session_file):
+        """Lazada refused this account's order: pause checkouts for every task on it,
+        and tell the user once per pause what to do."""
+        who = account or "default"
+        mins = REFUSED_PAUSE_S // 60
+        if pause_account_checkouts(account, session_file):
+            self.log(f"Lazada is refusing orders on account '{who}' — pausing its checkouts for "
+                     f"{mins} min (monitoring continues; a fresh 🔐 Login resumes them at once)")
+            notifier.send_event(
+                "🚫 Lazada is refusing orders", color=0xE74C3C, ping=True,
+                description=(f"Account *{who}* got \"unable to process your order\" on "
+                             f"{self.task['name']}. Checkouts on this account are paused for {mins} min "
+                             "— monitoring continues.\n"
+                             "• Check *To Pay* in the Lazada app for unpaid orders\n"
+                             "• 🔐 Login this account again — that resumes checkouts right away\n"
+                             "• Fewer tasks on one account makes this less likely"))
+        self.status("Lazada refused order — paused")
+
+    def _buy_now(self, page, buy_btn, url, qty, max_price, payment, dry_run, turbo,
+                 account, session_file, label=None):
+        """Buy Now → checkout inside this account's checkout slot. Returns the checkout
+        outcome, or None when nothing was bought (paused, waited too long, click failed)."""
+        with self._checkout_slot(account, url) as go:
+            if not go:
+                return None
+            self.status("IN STOCK — buying")
+            notifier.send_event("🟢 In Stock — buying", description=label or self.task["name"], url=url,
+                                color=0xF1C40F, fields={"Qty": qty}, ping=True)
+            set_quantity(page, qty, self.log)
+            maybe_pause(turbo, 0.5, 1.0)
+            try:
+                buy_btn.click()
+            except Exception as e:
+                self.log(f"buy click failed: {e}")
+                return None
+            maybe_pause(turbo, 0.8, 1.5)
+            self.status("checking out")
+            outcome = complete_checkout(page, self.task["name"], url, max_price, payment,
+                                        dry_run, self.log, turbo)
+            if outcome == "refused":  # inside the slot, so a task waiting on it sees the pause
+                self._on_refused(account, session_file)
+            return outcome
 
     def _wait_for_relogin(self, session_file, prev_mtime):
         self.status("session expired — re-login needed")
@@ -1384,24 +1553,14 @@ class TaskWorker(threading.Thread):
                                                             color=0x2ECC71, ping=True)
                                     self._wait(interval); continue
                                 announced_stock = False
-                                self.status("IN STOCK — buying")
-                                notifier.send_event("🟢 In Stock — buying", description=name, url=url,
-                                                    color=0xF1C40F, fields={"Qty": qty}, ping=True)
-                                blocker.enabled = False  # checkout/payment icons + PayNow QR need images
                                 if not buy_btn:
                                     self.log("Buy Now missing despite stock")
                                     self._wait(interval); continue
-                                set_quantity(page, qty, self.log)
-                                maybe_pause(turbo, 0.5, 1.0)
-                                try:
-                                    buy_btn.click()
-                                except Exception as e:
-                                    self.log(f"buy click failed: {e}")
+                                blocker.enabled = False  # checkout/payment icons + PayNow QR need images
+                                outcome = self._buy_now(page, buy_btn, url, qty, max_price, payment,
+                                                        dry_run, turbo, account, session_file)
+                                if outcome is None or outcome == "refused":  # not bought / account paused
                                     self._wait(interval); continue
-                                maybe_pause(turbo, 0.8, 1.5)
-
-                                self.status("checking out")
-                                outcome = complete_checkout(page, name, url, max_price, payment, dry_run, self.log, turbo)
                                 if outcome in ("ok", "pending"):
                                     self.purchased = True
                                     self.status("purchased ✓" if outcome == "ok"
@@ -1540,6 +1699,12 @@ class TaskWorker(threading.Thread):
                         notifier.send_event("🟢 Possible stock (watch list)", description=u,
                                             url=u, color=0x2ECC71, ping=True)
                         purchased.add(u)
+                elif checkout_pause(account)[0]:  # don't open a browser just to not buy
+                    confirmed = [u for u in candidates if results.get(u) == "in_stock"]
+                    if confirmed:
+                        self._checkout_paused(account, confirmed[0])
+                    else:
+                        self.status(f"polling {len(active)} URLs — checkout paused")
                 else:
                     self._watchlist_checkout(candidates, session_file, qty, payment, max_price, purchased)
             self._wait(interval)
@@ -1568,18 +1733,10 @@ class TaskWorker(threading.Thread):
                                 time.sleep(2); w += 2
                             continue
                         if result == "in_stock" and buy:
-                            self.status("IN STOCK — buying")
-                            notifier.send_event("🟢 In stock — buying", description=u, url=u,
-                                                color=0xF1C40F, ping=True)
-                            set_quantity(page, qty, self.log)
-                            human_pause(0.5, 1.0)
-                            try:
-                                buy.click()
-                            except Exception as e:
-                                self.log(f"buy click failed: {e}")
-                                continue
-                            human_pause(0.8, 1.5)
-                            outcome = complete_checkout(page, name, u, max_price, payment, False, self.log)
+                            outcome = self._buy_now(page, buy, u, qty, max_price, payment, False, False,
+                                                    self._account, session_file, label=u)
+                            if outcome == "refused":
+                                break  # the account's checkouts are paused — skip the rest
                             if outcome in ("ok", "pending", "limit"):
                                 purchased.add(u)
                                 self.log(f"done: {u} ({outcome})")
@@ -1697,6 +1854,13 @@ class TaskWorker(threading.Thread):
                 self.status("out of stock (fast http)")
             elif not drop:
                 self.status("watching (http)")
+            if drop and not alert_only and checkout_pause(account)[0]:
+                # Lazada is refusing this account's orders — no point opening a browser.
+                if r == "in_stock":
+                    self._checkout_paused(account, url)
+                else:
+                    self.status("watching (http) — checkout paused")
+                drop = False
             if drop:
                 if r == "unknown":
                     last_verify = now
@@ -1739,19 +1903,10 @@ class TaskWorker(threading.Thread):
                         notifier.send_event("🟢 In Stock", description=name, url=url,
                                             color=0x2ECC71, ping=True)
                         return True
-                    self.status("IN STOCK — buying")
-                    notifier.send_event("🟢 In Stock — buying", description=name, url=url,
-                                        color=0xF1C40F, fields={"Qty": qty}, ping=True)
-                    set_quantity(page, qty, self.log)
-                    maybe_pause(turbo, 0.5, 1.0)
-                    try:
-                        buy_btn.click()
-                    except Exception as e:
-                        self.log(f"buy click failed: {e}")
+                    outcome = self._buy_now(page, buy_btn, url, qty, max_price, payment, dry_run, turbo,
+                                            self._account, session_file)
+                    if outcome is None:
                         return False
-                    maybe_pause(turbo, 0.8, 1.5)
-                    self.status("checking out")
-                    outcome = complete_checkout(page, name, url, max_price, payment, dry_run, self.log, turbo)
                     if outcome in ("ok", "pending"):
                         self.purchased = True
                         self.status("purchased ✓" if outcome == "ok"

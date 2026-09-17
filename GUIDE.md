@@ -76,6 +76,8 @@ The **Mode** column shows the active flags, e.g. `buy·fast·turbo`.
 - **PayNow Transfer** — reserves the order and shows a QR; the bot sends the QR to Discord
   and you **pay within ~30 minutes**. Set the task's Payment to `PayNow Transfer`.
 - Blank = use whatever's pre-selected on the account.
+- The **Payment** column (between Mode and Status) shows what each task will pay with
+  ("Lazada default" = nothing set, so whatever Lazada pre-selects).
 
 ## 7. Running & monitoring
 - **▶ Start** a row (or **Start All**). The **Status** pill is colour-coded; the **Log**
@@ -93,6 +95,14 @@ window (drag the slider, or scan the QR with the Lazada app) — the bot resumes
 it's cleared. There is **no reliable full auto-solver** for the slider; avoidance is the
 real fix (see tips). reCAPTCHA (not the slider) can be auto-solved if you set a 2captcha
 `CAPTCHA_API_KEY` in `config.py`.
+
+**"Sorry, we are unable to process your order"** is Lazada refusing the *account*, not the
+product (too much traffic on one account, unpaid orders, or a stale login). The bot tries
+Lazada's **TRY AGAIN** once; if it's still refused, every task on that account **pauses
+checkouts for 10 min** (monitoring carries on, and in-stock items are still reported) and
+Discord tells you. To fix: check **To Pay** for unpaid orders, then **🔐 Login** that account
+again — a fresh login resumes its checkouts immediately. Only one checkout runs at a time
+per account, so two drops on the same account can't collide.
 
 ## 9. Updates & security
 - The bot checks for updates on launch and via **⬇ Updates**. An update is applied only if

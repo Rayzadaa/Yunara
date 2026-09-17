@@ -160,6 +160,57 @@ def test_left_checkout_ignores_query_and_fragment_changes():
     assert not engine._CONFIRM_SELECTION.match("Confirm")             # not a generic confirm
 
 
+# ─── engine: refused orders + one checkout per account ────────────
+
+def test_refused_account_pause_expires_or_lifts_on_fresh_login(tmp_path):
+    sess = str(tmp_path / "lazada_session.json")
+    open(sess, "w").write("{}")
+    engine._ACCOUNT_PAUSE.clear()
+    assert engine.checkout_pause("acct") == (0, None)
+    assert engine.pause_account_checkouts("acct", sess, seconds=60) is True     # fresh → alert
+    assert engine.pause_account_checkouts("acct", sess, seconds=60) is False    # already paused → no 2nd alert
+    left, pid = engine.checkout_pause("acct")
+    assert 50 < left <= 60 and pid
+    assert engine.checkout_pause("other")[0] == 0                              # other accounts unaffected
+    t = engine.os.path.getmtime(sess) + 5
+    engine.os.utime(sess, (t, t))                                              # a fresh login rewrites it
+    assert engine.checkout_pause("acct") == (0, None)
+    engine.pause_account_checkouts("acct", sess, seconds=-1)                   # already expired
+    assert engine.checkout_pause("acct") == (0, None)
+
+
+def test_checkout_slot_one_at_a_time_per_account_and_never_while_paused(tmp_path, monkeypatch):
+    import threading
+    monkeypatch.setattr(engine.notifier, "send_event", lambda *a, **k: True)
+    engine._ACCOUNT_PAUSE.clear()
+    mk = lambda: engine.TaskWorker({"name": "T", "url": "u"}, lambda *a: None, lambda *a: None)
+    a, b, other = mk(), mk(), mk()
+    order = []
+    with a._checkout_slot("acct", "u") as go_a:
+        assert go_a
+        with other._checkout_slot("someone-else", "u") as go_o:               # different account: no wait
+            assert go_o
+
+        def second():
+            with b._checkout_slot("acct", "u") as go_b:
+                order.append(("b", go_b))
+        th = threading.Thread(target=second)
+        th.start()
+        time.sleep(0.6)
+        order.append(("a done", True))                                         # b must still be waiting
+    th.join(5)
+    assert order == [("a done", True), ("b", True)], order
+
+    sess = str(tmp_path / "s.json")
+    open(sess, "w").write("{}")
+    engine.pause_account_checkouts("acct", sess, seconds=60)
+    with a._checkout_slot("acct", "u") as go:
+        assert go is False
+    assert engine._checkout_lock("acct").acquire(blocking=False)               # a paused slot holds no lock
+    engine._checkout_lock("acct").release()
+    engine._ACCOUNT_PAUSE.clear()
+
+
 # ─── engine: scheduled start ──────────────────────────────────────
 
 def test_parse_start_at():

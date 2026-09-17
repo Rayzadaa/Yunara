@@ -1,3 +1,19 @@
+## v2.9.25 — handle "unable to process your order" + Payment column
+- **"Sorry, we are unable to process your order" is handled.** That page is Lazada refusing
+  the *account* (too much traffic on it, unpaid orders or a stale login). The bot used to
+  wait ~14s for an order form that never came and then retry up to 3× — more load on an
+  account that was already refusing. Now it spots the page at once and tries Lazada's
+  own **TRY AGAIN** once. If it's still refused, **every task on that account pauses
+  checkouts for 10 min** while monitoring carries on, Discord tells you what to do, and
+  items that come into stock meanwhile are still reported so you can buy by hand.
+  **A fresh 🔐 Login on that account resumes checkouts immediately.**
+- **One checkout at a time per account.** When two tasks on the same account drop
+  together, the second waits for the first instead of two Buy Nows colliding.
+- **New Payment column** (between Mode and Status) — what each task will pay with at a
+  glance ("Lazada default" means nothing is set, so whatever Lazada pre-selects is used).
+- New statuses: "Lazada refused order — paused" (red), "IN STOCK — checkout paused" and
+  "waiting for another checkout" (amber).
+
 ## v2.9.24 — PayNow "Confirm Selection" fix
 - **PayNow checkouts no longer stall on Lazada's new "How to pay via PayNow Transfer"
   popup.** Lazada now wants **Confirm Selection** clicked after you pick PayNow. The bot

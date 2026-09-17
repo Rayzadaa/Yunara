@@ -46,8 +46,8 @@ ORDERS_FILE = os.path.join(HERE, "orders.log")
 PAYMENTS = ["", "PayNow Transfer", "Lazada Wallet", "Credit / Debit Card",
             "Cash on Delivery", "PayLater", "GrabPay", "Bank Transfer"]
 
-COLS = ["Name", "Product URL", "Account", "Variant", "Qty", "Proxy", "Interval", "Mode", "Status", ""]
-C_NAME, C_URL, C_ACCT, C_VAR, C_QTY, C_PROXY, C_INT, C_MODE, C_STATUS, C_ACT = range(10)
+COLS = ["Name", "Product URL", "Account", "Variant", "Qty", "Proxy", "Interval", "Mode", "Payment", "Status", ""]
+C_NAME, C_URL, C_ACCT, C_VAR, C_QTY, C_PROXY, C_INT, C_MODE, C_PAY, C_STATUS, C_ACT = range(11)
 
 ACCENT = "#f57224"  # Lazada orange
 
@@ -103,6 +103,10 @@ def load_phone():
 
 def pill_colors(status):
     s = status.lower()
+    if "refused" in s:     # Lazada refusing the account's orders
+        return PILL_RED
+    if "paused" in s:      # checkouts on hold for the account (even if in stock)
+        return PILL_AMBER
     if any(k in s for k in ("purchased", "in stock", "ordered", "order placed", "all done")):
         return PILL_GREEN
     if any(k in s for k in ("error", "failed", "expired", "captcha", "unavailable", "sold out")):
@@ -532,6 +536,7 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(COLS)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(C_URL, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(C_PAY, QHeaderView.ResizeMode.ResizeToContents)  # method names never clip
         # Status auto-fits the widest pill so longer statuses (purchased, buying…)
         # never clip; the stretched URL column absorbs the width change.
         hh.setSectionResizeMode(C_STATUS, QHeaderView.ResizeMode.ResizeToContents)
@@ -698,6 +703,24 @@ class MainWindow(QMainWindow):
             it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
         return it
 
+    def _payment_cell(self, t):
+        """The payment method checkout will pick. Watch-only tasks never pay, and a
+        blank method means whatever Lazada has pre-selected at checkout."""
+        pay = (t.get("payment") or "").strip()
+        if t.get("keyword") or t.get("alert_only"):
+            it = self._cell("— (alert only)")
+            it.setToolTip("This task only alerts — it never checks out.")
+        elif pay:
+            it = self._cell(pay)
+            it.setToolTip(f"Checkout pays with: {pay}")
+        else:
+            it = self._cell("Lazada default")
+            it.setToolTip("No payment method set — checkout uses whatever Lazada has pre-selected.\n"
+                          "Set one under ✎ Edit → Payment method.")
+        if not pay or t.get("keyword") or t.get("alert_only"):
+            it.setForeground(QColor("#8a8a8e"))
+        return it
+
     def _refresh_table(self):
         self._refreshing = True
         self.table.setSortingEnabled(False)
@@ -725,6 +748,7 @@ class MainWindow(QMainWindow):
             self.table.setItem(r, C_PROXY, self._cell(proxy_txt))
             self.table.setItem(r, C_INT, self._cell(str(t.get("interval", 8)) + "s", editable=True))
             self.table.setItem(r, C_MODE, self._cell(self._mode(t)))
+            self.table.setItem(r, C_PAY, self._payment_cell(t))
             running = t["name"] in self.workers
             self.table.setItem(r, C_STATUS, self._status_item(
                 self._statuses.get(t["name"], "idle") if running else "idle"))
