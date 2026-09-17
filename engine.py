@@ -25,7 +25,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.23"
+VERSION = "2.9.24"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -355,6 +355,37 @@ def select_variant(page, variant, log, turbo=False):
         return False
 
 
+_CONFIRM_SELECTION = re.compile(r"^\s*confirm selection\s*$", re.I)
+
+
+def _confirm_payment_sheet(page, log, wait=0.0):
+    """Lazada's PayNow Transfer opens a "How to pay via PayNow Transfer" sheet, and
+    the choice only sticks once its "Confirm Selection" button is clicked — until
+    then the sheet also covers Place Order. Checks every frame (the sheet may be
+    embedded) for up to `wait` seconds; returns True if it confirmed one."""
+    end = time.time() + wait
+    while True:
+        for frame in list(page.frames):
+            try:
+                btn = frame.get_by_text(_CONFIRM_SELECTION).first
+                if btn.count() and btn.is_visible():
+                    try:
+                        btn.click(timeout=3000)
+                    except Exception:
+                        btn.evaluate("(el) => el.click()")
+                    try:
+                        btn.wait_for(state="hidden", timeout=4000)
+                    except Exception:
+                        pass
+                    log('confirmed payment selection ("Confirm Selection")')
+                    return True
+            except Exception:
+                pass
+        if time.time() >= end:
+            return False
+        time.sleep(0.1)
+
+
 def select_payment(page, payment, log, turbo=False):
     if not payment:
         return True
@@ -393,6 +424,9 @@ def select_payment(page, payment, log, turbo=False):
             if h:
                 page.evaluate(
                     "(el) => { const c = el.closest('label, [role=\"radio\"], li, div') || el; c.click(); }", h)
+        # PayNow's sheet renders a moment after the click. Other methods haven't shown
+        # one, so they only get an instant check (Place Order still handles a late one).
+        _confirm_payment_sheet(page, log, wait=1.5 if "paynow" in payment.lower().replace(" ", "") else 0)
         log(f"selected payment: {payment}")
         maybe_pause(turbo, 0.6, 1.2)
         return True
@@ -802,12 +836,24 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
             return "stop"
 
         existing = list(page.context.pages)
+        checkout_url = page.url
         try:
             place.click(timeout=5000)
         except Exception:
-            h = place.element_handle()
-            if h:
-                page.evaluate("(el) => el.click()", h)
+            # Something covers Place Order. If it's a payment sheet still waiting for
+            # "Confirm Selection", confirm it and click for real — force-clicking
+            # through it places the order with the payment choice unconfirmed.
+            clicked = False
+            if _confirm_payment_sheet(page, log, wait=1.0):
+                try:
+                    place.click(timeout=5000)
+                    clicked = True
+                except Exception:
+                    pass
+            if not clicked:
+                h = place.element_handle()
+                if h:
+                    page.evaluate("(el) => el.click()", h)
 
         maybe_pause(turbo, 0.6, 1.0)
         log(f"⏱ order submitted {time.time() - t0:.1f}s")
@@ -826,10 +872,11 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
         existing_set = set(existing)
         target = page
         followed = False
-        keys = ["thank you for your purchase", "order has been placed", "paynow",
+        keys = ["thank you for your purchase", "order has been placed",
                 "scan to pay", "complete your payment", "pay within", "reference no",
                 "reached the limit", "oc03", "unavailable item"]
         end = time.time() + 15
+        sheet_confirms = 0
         while time.time() < end:
             extra = [pg for pg in page.context.pages if pg not in existing_set]
             if extra:
@@ -837,13 +884,23 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
                 if not followed:
                     followed = True
                     log(f"followed new tab: {target.url}")
+            # The payment step can ask for "Confirm Selection" too — confirm it so the
+            # PayNow QR gets generated, and give that page time to load. (Capped, so
+            # a button that won't go away can't keep extending the wait.)
+            if sheet_confirms < 2 and _confirm_payment_sheet(target, log):
+                sheet_confirms += 1
+                end = max(end, time.time() + 10)
+                continue
             try:
                 if target.query_selector(SEL["thank_you"]):
                     break
                 snap = target.inner_text("body").lower()
             except Exception:
                 snap = ""
-            if any(k in snap for k in keys):
+            # "PayNow" alone proves nothing while still on checkout: the page itself
+            # lists "PayNow Transfer". Stopping on it read the page before the order
+            # went through and misjudged it as "not placed" (→ retry).
+            if any(k in snap for k in keys) or ("paynow" in snap and _left_checkout(target, checkout_url, followed)):
                 break
             time.sleep(0.25)
         log(f"⏱ outcome {time.time() - t0:.1f}s")
@@ -892,16 +949,23 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
                                 color=0x95A5A6, url=url)
             return "limit"
 
-        # 3) Still on the checkout page -> order was NOT placed; retry.
-        if "select payment method" in post and "place order" in post:
+        # 3) Still on the checkout page -> order was NOT placed; retry. Only when we
+        # really are still there: Lazada's payment step is also titled "Select Payment
+        # Method", and retrying from it would order a second time.
+        if (not _left_checkout(target, checkout_url, followed)
+                and "select payment method" in post and "place order" in post):
             log("still on checkout after Place Order — not placed")
             return "retry"
 
         # 3) Order RESERVED but needs manual payment (PayNow / bank transfer, ~30 min).
-        pending_signals = ["paynow", "scan to pay", "scan the qr", "complete your payment",
-                           "complete the payment", "pay within", "payment reference", "reference no",
-                           "awaiting payment", "pending payment", "order has been placed", "transfer to"]
-        if any(s in post for s in pending_signals) or "payment" in post_url or "cashier" in post_url:
+        pending_signals = ["scan to pay", "scan the qr", "complete your payment",
+                           "pay within", "payment reference", "reference no",
+                           "awaiting payment", "pending payment", "order has been placed"]
+        # Wording that also appears ON the checkout page (the method list, the PayNow
+        # how-to sheet) only counts once we've actually left it.
+        weak_signals = ["paynow", "transfer to", "complete the payment"]
+        if (any(s in post for s in pending_signals) or "payment" in post_url or "cashier" in post_url
+                or (_left_checkout(target, checkout_url, followed) and any(s in post for s in weak_signals))):
             amount = _extract_amount(post) or checkout_total
             log(f"ORDER RESERVED — pending PayNow/manual payment (amount {amount or '?'})")
             notifier.send_event("⏰ ORDER RESERVED — PAY WITHIN ~30 MIN",
@@ -927,6 +991,17 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
     except Exception as e:
         log(f"checkout error: {e}")
         return "retry"
+
+
+def _left_checkout(target, checkout_url, followed):
+    """True once the outcome is on another page: a new tab, or a different path than
+    the checkout page (its query string/fragment can change without leaving)."""
+    def path(u):
+        return (u or "").lower().split("#")[0].split("?")[0]
+    try:
+        return followed or path(target.url) != path(checkout_url)
+    except Exception:
+        return followed
 
 
 def _extract_amount(text):

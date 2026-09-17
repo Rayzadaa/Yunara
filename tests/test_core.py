@@ -143,6 +143,23 @@ def test_http_stock_blames_the_proxy_only_when_one_is_used(monkeypatch):
     assert engine.http_stock(url, None, "not-a-proxy") == "proxy_error"  # never silently goes direct
 
 
+# ─── engine: checkout outcome ─────────────────────────────────────
+
+def test_left_checkout_ignores_query_and_fragment_changes():
+    """'PayNow' on the page only counts as an outcome once we've left checkout — the
+    checkout page itself lists "PayNow Transfer"."""
+    class Page:
+        def __init__(self, url):
+            self.url = url
+    co = "https://checkout.lazada.sg/shipping?spm=a2o42.pdp_revamp.main_page.bottom_bar_main_button"
+    assert not engine._left_checkout(Page(co), co, False)
+    assert not engine._left_checkout(Page("https://checkout.lazada.sg/shipping?x=1#pay"), co, False)
+    assert engine._left_checkout(Page("https://checkout.lazada.sg/payment?orderId=1"), co, False)
+    assert engine._left_checkout(Page(co), co, True)                 # a new tab opened
+    assert engine._CONFIRM_SELECTION.match("  Confirm Selection ")
+    assert not engine._CONFIRM_SELECTION.match("Confirm")             # not a generic confirm
+
+
 # ─── engine: scheduled start ──────────────────────────────────────
 
 def test_parse_start_at():

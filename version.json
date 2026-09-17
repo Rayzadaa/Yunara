@@ -1,7 +1,7 @@
 {
-  "version": "2.9.23",
+  "version": "2.9.24",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "79dd64081ae5a5a5757f4f8cd09a9b1ef3b185eae48c22e34c89421c518191ff",
-  "signature": "6b5bede7c27629f57635223b7eef32e36ce3367aaa4d7bee6bc22408f2d04ecc95e56b035e3d76b3cbf4204c52a0bd74443d1e635d7b5fb7de3a309cead4b10a",
-  "notes": "Scheduled start now takes seconds (HH:MM:SS), so a task can begin exactly on a known drop time, and a mistyped start time is caught when you save the task instead of at drop time."
+  "sha256": "26f10117531cf03d6e9e24fd3eee06abe3dbb22b5c4c25beb6c983e0aba0ba22",
+  "signature": "4f4b2f877236e0d8c06faf5ae83e8e48f262e4b91c33b84cd87344fca0639f405aaa1c530248a48d118160dd108eebc83498a4855a5806004c67b50d589eab07",
+  "notes": "Fixes PayNow checkouts stalling on Lazada's new \"Confirm Selection\" popup (orders were going through with PayNow unconfirmed), and a bug that could misread a placed PayNow order as \"not placed\" and order twice."
 }

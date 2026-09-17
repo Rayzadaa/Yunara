@@ -1,3 +1,17 @@
+## v2.9.24 — PayNow "Confirm Selection" fix
+- **PayNow checkouts no longer stall on Lazada's new "How to pay via PayNow Transfer"
+  popup.** Lazada now wants **Confirm Selection** clicked after you pick PayNow. The bot
+  didn't, so the popup covered Place Order for ~5s and the order was then pushed through
+  with PayNow never confirmed. It now confirms the popup — including when it's inside an
+  embedded frame or appears on the payment step after Place Order — and then clicks
+  Place Order normally.
+- **Fixed a PayNow order being misread as "not placed" and ordered twice.** The checkout
+  page itself lists "PayNow Transfer", and the bot took that word as the order result
+  before Lazada had finished — so a placed order could be judged "not placed" and
+  retried. It now waits for the real outcome page.
+- When the popup shows on the payment step, the bot confirms it so the PayNow QR is
+  generated, and the Discord screenshot and amount come from the QR page.
+
 ## v2.9.23 — scheduled start to the second
 - **Scheduled start now accepts seconds**: `HH:MM:SS` as well as `HH:MM`, so a task can
   begin exactly on a known drop time (e.g. `13:00:00`) instead of anywhere inside that
