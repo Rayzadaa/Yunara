@@ -96,6 +96,12 @@ it's cleared. There is **no reliable full auto-solver** for the slider; avoidanc
 real fix (see tips). reCAPTCHA (not the slider) can be auto-solved if you set a 2captcha
 `CAPTCHA_API_KEY` in `config.py`.
 
+Lazada also shows a **verification dialog** (a grey mask over the whole page) when an
+account looks automated — often right on the login page. The bot spots it, brings the
+window to the front, alerts you, and continues the login the moment you clear it. If it
+keeps appearing, the account is flagged: stop its tasks, sign in once in your normal
+Chrome, and give it some quiet time before running again.
+
 **"Sorry, we are unable to process your order"** is Lazada refusing the *account*, not the
 product (too much traffic on one account, unpaid orders, or a stale login). The bot tries
 Lazada's **TRY AGAIN** once; if it's still refused, every task on that account **pauses

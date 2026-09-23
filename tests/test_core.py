@@ -160,6 +160,66 @@ def test_left_checkout_ignores_query_and_fragment_changes():
     assert not engine._CONFIRM_SELECTION.match("Confirm")             # not a generic confirm
 
 
+# ─── engine: proxy test messages ──────────────────────────────────
+
+def test_proxy_errors_say_what_actually_went_wrong():
+    """A dead gateway used to log 80 chars of urllib3 noise ("HTTPSConnectionPool(host=
+    'api.ipify.org'… Max retries exceeded with u") that named the wrong host."""
+    dns = ("HTTPSConnectionPool(host='api.ipify.org', port=443): Max retries exceeded (Caused by "
+           "ProxyError('Unable to connect to proxy', NameResolutionError(\"Failed to resolve "
+           "'gw.example-proxies.com' ([Errno 11001] getaddrinfo failed)\")))")
+    assert engine._proxy_error(Exception(dns)) == "host not found (DNS) — check the proxy's gateway hostname"
+    assert "407" in engine._proxy_error(Exception("Tunnel connection failed: 407 Proxy Authentication Required"))
+    assert "timed out" in engine._proxy_error(Exception("Read timed out. (read timeout=15)"))
+    assert "refused" in engine._proxy_error(Exception("[WinError 10061] the target machine actively refused it"))
+    assert engine._proxy_error(Exception("something else\nsecond line")) == "something else"
+
+
+# ─── engine: Lazada verification (slider / baxia dialog) ──────────
+
+class _FakePage:
+    url = "https://www.lazada.sg/"
+
+    def __init__(self, present=""):
+        self.present = present
+
+    def query_selector(self, sel):
+        class El:
+            @staticmethod
+            def is_visible():
+                return True
+        return El() if sel == self.present else None
+
+
+def test_baxia_dialog_counts_as_verification():
+    """Lazada's anti-bot dialog is a full-page mask that swallows clicks — it must
+    register like the slider does (it silently ate the Login click before v2.9.26)."""
+    assert engine.check_for_captcha(_FakePage(".baxia-dialog-mask"))
+    assert engine.check_for_captcha(_FakePage(".baxia-dialog"))
+    assert engine.check_for_captcha(_FakePage(".nc-container"))
+    assert not engine.check_for_captcha(_FakePage(".ordinary-page-element"))
+
+
+def test_wait_for_verification_waits_for_the_solve_then_continues(monkeypatch):
+    states = iter([True, True, False])
+    monkeypatch.setattr(engine, "check_for_captcha", lambda page: next(states, False))
+    monkeypatch.setattr(engine, "handle_captcha", lambda page, log: False)
+    monkeypatch.setattr(engine, "notify", lambda *a, **k: None)
+    logs = []
+    assert engine.wait_for_verification(_FakePage(), logs.append, timeout=20) is True
+    assert any("solve it in the browser window" in m for m in logs), logs
+    assert any("cleared" in m for m in logs), logs
+
+
+def test_wait_for_verification_gives_up_when_never_solved(monkeypatch):
+    monkeypatch.setattr(engine, "check_for_captcha", lambda page: True)
+    monkeypatch.setattr(engine, "handle_captcha", lambda page, log: False)
+    monkeypatch.setattr(engine, "notify", lambda *a, **k: None)
+    assert engine.wait_for_verification(_FakePage(), lambda m: None, timeout=0.5) is False
+    monkeypatch.setattr(engine, "check_for_captcha", lambda page: False)
+    assert engine.wait_for_verification(_FakePage(), lambda m: None) is True   # nothing in the way
+
+
 # ─── engine: refused orders + one checkout per account ────────────
 
 def test_refused_account_pause_expires_or_lifts_on_fresh_login(tmp_path):

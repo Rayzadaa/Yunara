@@ -1,3 +1,20 @@
+## v2.9.26 — login no longer dies on Lazada's verification dialog
+- **Lazada's anti-bot dialog is recognised everywhere.** It renders as a full-page mask
+  (`baxia`) that swallows every click. The bot only knew the slider CAPTCHA, so at login
+  it clicked into the invisible mask for 30s and gave up with a cryptic
+  `login error: ElementHandle.click…` — with nothing telling you a verification was
+  waiting. It now counts as a CAPTCHA in monitoring, checkout **and** login.
+- **Login waits for you to solve it:** the log says "Lazada verification is blocking the
+  page — solve it in the browser window", the window is brought to the front, Discord is
+  pinged, a desktop alert fires and the Login label turns amber. The login carries on the
+  moment it's cleared (up to 3 min), and gives up with a plain "Login ABORTED — Lazada
+  verification wasn't solved in time" instead of a Playwright dump.
+- Checked before clicking Login and again after requesting the SMS code, the two moments
+  the dialog actually appears.
+- **Proxy test says what actually failed** — "host not found (DNS) — check the proxy's
+  gateway hostname", "proxy rejected the login (407)", "timed out", "connection refused"
+  — instead of 80 characters of urllib3 noise naming the wrong host.
+
 ## v2.9.25 — handle "unable to process your order" + Payment column
 - **"Sorry, we are unable to process your order" is handled.** That page is Lazada refusing
   the *account* (too much traffic on it, unpaid orders or a stale login). The bot used to

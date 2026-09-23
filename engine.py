@@ -26,7 +26,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.25"
+VERSION = "2.9.26"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -42,7 +42,10 @@ SEL = {
     "sku_selector": ".sku-selector-v2",
     "sku_selected_header": ".sku-prop-content-header",
     "qty_plus": "i.next-icon-add",
+    # ".baxia-*" is Lazada's anti-bot verification dialog — a full-page mask that
+    # swallows clicks (it silently ate the Login click until v2.9.26).
     "captcha": [".nc-container", "#nc_1_wrapper", ".nc_iconfont", "#nocaptcha",
+                ".baxia-dialog", ".baxia-dialog-mask",
                 ".J_MIDDLEWARE_FRAME_WIDGET", "iframe[src*='captcha']", "iframe[name*='captcha']"],
     "slider_handle": [".nc_iconfont.btn_slide", ".btn_slide", ".nc-lang-cnt .btn_slide"],
     "slider_track": [".nc_scale", ".scale_text"],
@@ -139,6 +142,24 @@ def mask_proxy(raw):
     return scheme + raw
 
 
+def _proxy_error(e):
+    """One readable line instead of urllib3's nested dump. The real fault is nearly
+    always one of these — a gateway hostname that doesn't exist, bad credentials, a
+    closed port or a proxy too slow to answer."""
+    text = str(e)
+    low = text.lower()
+    if any(k in low for k in ("getaddrinfo failed", "name or service not known",
+                              "nameresolutionerror", "failed to resolve")):
+        return "host not found (DNS) — check the proxy's gateway hostname"
+    if "407" in text:
+        return "proxy rejected the login (407) — check the proxy user/password"
+    if "timed out" in low or "timeout" in low:
+        return "timed out — proxy unreachable or too slow"
+    if "refused" in low:
+        return "connection refused — wrong port, or the gateway is down"
+    return text.splitlines()[0][:80]
+
+
 def test_proxy(raw, timeout=15):
     """Lightweight latency test: fetch a tiny IP-echo endpoint through the proxy
     (no browser, no heavy page) and report round-trip ms + the exit IP."""
@@ -165,7 +186,7 @@ def test_proxy(raw, timeout=15):
             pass
         return (True, f"ok ({ms} ms, exit IP {ip or '?'})")
     except Exception as e:
-        return (False, str(e).splitlines()[0][:80])
+        return (False, _proxy_error(e))
 
 
 def human_pause(min_s=0.3, max_s=0.7):
@@ -276,6 +297,26 @@ def handle_captcha(page, log):
                 return True
         except Exception as e:
             log(f"captcha solver error: {e}")
+    return False
+
+
+VERIFY_WAIT_S = 180
+
+
+def wait_for_verification(page, log, timeout=None):
+    """Lazada verification (slider or baxia dialog) is covering the page: try to clear
+    it, bring the window to the front and wait for a manual solve. True once clear."""
+    if not check_for_captcha(page):
+        return True
+    log("Lazada verification is blocking the page — solve it in the browser window")
+    notify("⚠️ *Login*: Lazada verification — solve it in the browser window.")
+    handle_captcha(page, log)
+    end = time.time() + (VERIFY_WAIT_S if timeout is None else timeout)
+    while time.time() < end:
+        if not check_for_captcha(page):
+            log("verification cleared — continuing")
+            return True
+        time.sleep(2)
     return False
 
 
@@ -1173,12 +1214,27 @@ class LoginManager:
                     _save_session(context, self.session_file)
                     return True
 
+                if not wait_for_verification(page, self.log):
+                    self.log("Login ABORTED — Lazada verification wasn't solved in time.")
+                    return False
+
                 self.log("Clicking Login…")
                 btn = page.query_selector(SEL["login_link"])
                 if not btn:
                     self.log("Login button not found.")
                     return False
-                btn.click(); human_pause(1.5, 2.5)
+                try:
+                    btn.click(timeout=8000)
+                except Exception:
+                    # A verification dialog over the page swallows the click (its mask
+                    # intercepts pointer events) — that used to retry silently for 30s
+                    # and end as a bare "login error".
+                    if not wait_for_verification(page, self.log):
+                        self.log("Login ABORTED — the verification dialog is still blocking Login.")
+                        return False
+                    btn = page.query_selector(SEL["login_link"]) or btn
+                    btn.click(timeout=8000)
+                human_pause(1.5, 2.5)
 
                 self.log("Selecting phone tab…")
                 tab = _first(page, SEL["phone_tab"]) or page.get_by_text("Phone Number", exact=False)
@@ -1204,6 +1260,9 @@ class LoginManager:
                     except Exception:
                         pass
                 human_pause(2, 3)
+                if not wait_for_verification(page, self.log):  # often fires on "send code"
+                    self.log("Login ABORTED — Lazada verification wasn't solved in time.")
+                    return False
 
                 self.log("Waiting for OTP…")
                 otp = self.get_otp()

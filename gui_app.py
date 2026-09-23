@@ -167,6 +167,7 @@ class Bridge(QObject):
     update_found = pyqtSignal(dict)
     update_done = pyqtSignal(bool, str)
     warm_done = pyqtSignal()
+    login_alert = pyqtSignal(str)   # login needs a human (Lazada verification)
 
 
 # ─── Dialogs ──────────────────────────────────────────────────────
@@ -459,6 +460,7 @@ class MainWindow(QMainWindow):
         self.bridge.otp_request.connect(self.on_otp_request)
         self.bridge.login_done.connect(self.on_login_done)
         self.bridge.needs_login.connect(self.on_needs_login)
+        self.bridge.login_alert.connect(self.on_login_alert)
         self.bridge.update_found.connect(self.on_update_found)
         self.bridge.update_done.connect(self._finish_update)
         self.bridge.warm_done.connect(lambda: self.warm_btn.setEnabled(True))
@@ -1026,9 +1028,15 @@ class MainWindow(QMainWindow):
             except Exception:
                 return None
 
+        def login_log(m):
+            self.bridge.log.emit("login", m)
+            # Lazada's verification dialog needs you at the keyboard — say so loudly
+            # instead of leaving "Logging in…" sitting there until it times out.
+            if "verification" in m.lower() or "captcha" in m.lower():
+                self.bridge.login_alert.emit(m)
+
         def run():
-            ok = engine.LoginManager(phone, get_otp, lambda m: self.bridge.log.emit("login", m),
-                                     proxy_raw, session_file).run()
+            ok = engine.LoginManager(phone, get_otp, login_log, proxy_raw, session_file).run()
             self.bridge.login_done.emit(ok, account_label or "default")
 
         threading.Thread(target=run, daemon=True).start()
@@ -1036,6 +1044,20 @@ class MainWindow(QMainWindow):
     def on_otp_request(self):
         otp, ok = QInputDialog.getText(self, "OTP", "Enter the SMS code:")
         self.otp_queue.put(otp.strip() if ok else None)
+
+    def on_login_alert(self, msg):
+        """Lazada put a verification dialog in front of the login — it can only be
+        cleared by hand, so alert like a CAPTCHA and keep the window findable."""
+        if "cleared" in msg.lower():
+            self.login_lbl.setText("Verification cleared — continuing…")
+            return
+        self.login_lbl.setText("⚠️ Verification — solve it in the browser window")
+        self._set_login_dot("#faa61a")
+        if self.desktop_alerts:
+            self.show_tray_message("⚠️ Lazada verification", "Solve it in the login window", "captcha")
+        if self.alert_sound and desktop_alert:
+            desktop_alert.enabled = True
+            desktop_alert.play("captcha")
 
     def on_login_done(self, ok, label):
         self._login_busy = False

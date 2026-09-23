@@ -1,7 +1,7 @@
 {
-  "version": "2.9.25",
+  "version": "2.9.26",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "1ce84a9357e57e873b3a4b46cb220485b29c873ac5d237675c489411faebfba8",
-  "signature": "11d0202938b85a3f38592ce2eb25433e4f3fc70a7e8217a74b884a88092935ae6162cb128e89f1d04435a87b33ae13f1a3284dbfe30c42c6f7d82e848a21590d",
-  "notes": "Handles Lazada's \"unable to process your order\" page: one TRY AGAIN, then that account's checkouts pause 10 min with a Discord alert (a fresh login resumes them). One checkout at a time per account, and a new Payment column in the task table."
+  "sha256": "b35ffdc4587b4cb1d9e3d64fc89ecadabb7a58b28039cf773f1a1f79f706544c",
+  "signature": "bb474e932ca0b181650e9bdc9ffc61ff7f1845a35f152bb3c76748472b511165d82019b9c59af4f55ef8649138762de06933575d3c334d812eb6433ccc77c70d",
+  "notes": "Login no longer dies on Lazada's anti-bot verification dialog: it's recognised everywhere, and the login alerts you, waits for the solve and carries on \u2014 instead of clicking into an invisible mask for 30s and failing with a cryptic error."
 }
