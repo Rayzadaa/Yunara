@@ -253,7 +253,7 @@ def test_checkout_slot_one_at_a_time_per_account_and_never_while_paused(tmp_path
 
         def second():
             with b._checkout_slot("acct", "u") as go_b:
-                order.append(("b", go_b))
+                order.append(("b", bool(go_b)))
         th = threading.Thread(target=second)
         th.start()
         time.sleep(0.6)
@@ -265,10 +265,73 @@ def test_checkout_slot_one_at_a_time_per_account_and_never_while_paused(tmp_path
     open(sess, "w").write("{}")
     engine.pause_account_checkouts("acct", sess, seconds=60)
     with a._checkout_slot("acct", "u") as go:
-        assert go is False
+        assert not go
     assert engine._checkout_lock("acct").acquire(blocking=False)               # a paused slot holds no lock
     engine._checkout_lock("acct").release()
     engine._ACCOUNT_PAUSE.clear()
+
+
+def test_checkout_slot_is_handed_on_as_soon_as_the_order_is_in():
+    """Confirming a PayNow outcome takes 8-20s on the real site; a second drop on the
+    same account must start as soon as Place Order is clicked, not after that wait."""
+    import threading
+    mk = lambda: engine.TaskWorker({"name": "T", "url": "u"}, lambda *a: None, lambda *a: None)
+    a, b = mk(), mk()
+    got_in = threading.Event()
+    with a._checkout_slot("acct2", "u") as slot:
+        assert slot
+
+        def second():
+            with b._checkout_slot("acct2", "u") as s2:
+                if s2:
+                    got_in.set()
+        th = threading.Thread(target=second)
+        th.start()
+        assert not got_in.wait(0.5)            # still A's turn
+        slot.release()                          # A clicked Place Order
+        assert got_in.wait(3)                   # B goes straight away, while A is still confirming
+        slot.release()                          # releasing twice is harmless
+    th.join(5)
+
+
+# ─── notifier: background delivery ────────────────────────────────
+
+def test_discord_messages_never_hold_up_the_caller_and_stay_in_order(monkeypatch):
+    sent = []
+
+    class SlowDiscord:
+        def post(self, url, **kw):
+            time.sleep(0.4)                     # a real webhook call is ~0.7s from here
+            sent.append((kw.get("json") or {}).get("embeds", [{}])[0].get("title"))
+
+            class R:
+                ok, status_code, text = True, 204, ""
+            return R()
+
+    monkeypatch.setattr(notifier.requests, "Session", SlowDiscord)
+    monkeypatch.setattr(notifier, "_sender", None)
+    notifier.set_webhook("https://discord.example/api/webhooks/1/x")
+    try:
+        t0 = time.time()
+        for title in ("🟢 In Stock — buying", "🎉 Order Placed!", "🧾 receipt"):
+            assert notifier.send_event(title) is True
+        assert time.time() - t0 < 0.2, "the checkout thread waited for Discord"
+        notifier.flush(5)
+        assert sent == ["🟢 In Stock — buying", "🎉 Order Placed!", "🧾 receipt"], sent
+    finally:
+        notifier.set_webhook("")
+
+
+def test_discord_test_button_still_gets_the_real_result(monkeypatch):
+    class R:
+        def __init__(self, ok):
+            self.ok, self.status_code, self.text = ok, 204 if ok else 404, ""
+    monkeypatch.setattr(notifier.requests, "post", lambda url, **kw: R(False))
+    notifier.set_webhook("https://discord.example/api/webhooks/1/x")
+    try:
+        assert notifier.send_event("✅ test", wait=True) is False   # a bad URL is reported, not assumed sent
+    finally:
+        notifier.set_webhook("")
 
 
 # ─── engine: scheduled start ──────────────────────────────────────

@@ -1,3 +1,21 @@
+## v2.9.27 — faster checkout + a double-order fix
+- **Buy Now no longer waits for Discord.** The "🟢 In Stock — buying" alert was sent — and
+  waited for — right before clicking Buy Now: ~0.7s on a typical connection, up to 10s
+  when Discord is slow. All Discord messages now go out in the background, in order, over
+  one reused connection (which also delivers them ~2× faster). Nothing is lost when you
+  close the app straight after a buy — pending alerts get a few seconds to finish.
+- **A second drop on the same account starts at once.** The one-checkout-per-account
+  turn used to be held until the first order's outcome was confirmed — 8–20s on real
+  PayNow orders. It's now handed on the moment Place Order is clicked (tested: 38s → 2s
+  between two orders).
+- **Fixed a double-order risk when Lazada is slow after Place Order.** If Lazada's next
+  page took more than 5s to answer, the click timed out *after* the order had gone in,
+  the bot stalled 30s and then reported "checkout retry" — which would buy a second
+  time. The click no longer waits for that page, and any error after Place Order now
+  stops with a "check your order" alert instead of retrying.
+- A late PayNow "Confirm Selection" popup is confirmed right before Place Order, instead
+  of blocking the click for 5s first.
+
 ## v2.9.26 — login no longer dies on Lazada's verification dialog
 - **Lazada's anti-bot dialog is recognised everywhere.** It renders as a full-page mask
   (`baxia`) that swallows every click. The bot only knew the slider CAPTCHA, so at login

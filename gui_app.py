@@ -332,7 +332,8 @@ class WebhookDialog(QDialog):
             QMessageBox.warning(self, "No URL", "Enter a webhook URL first."); return
         pw, pr = notifier.get_webhook(), notifier.get_role()
         notifier.set_webhook(u); notifier.set_role(self.role.text().strip())
-        ok = notifier.send_event("✅ Lazada Bot test", description="Notifications work!", color=0x3498DB)
+        ok = notifier.send_event("✅ Lazada Bot test", description="Notifications work!", color=0x3498DB,
+                                 wait=True)  # the dialog reports the real result
         notifier.set_webhook(pw); notifier.set_role(pr)
         QMessageBox.information(self, "Test", "Sent — check Discord." if ok else "Failed — check the URL.")
 

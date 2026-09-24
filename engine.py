@@ -26,7 +26,7 @@ try:
 except Exception:  # new module: may be absent on clients updated with an older whitelist
     secure_store = None
 
-VERSION = "2.9.26"
+VERSION = "2.9.27"
 HERE = os.path.dirname(__file__)
 SESSION_FILE = os.path.join(HERE, "lazada_session.json")  # default profile
 CHROME_CHANNEL = "chrome"
@@ -850,6 +850,22 @@ def checkout_pause(account):
         return (left, resume_at)
 
 
+class _Slot:
+    """What TaskWorker._checkout_slot yields: truthy when this task may check out.
+    release() hands the account's turn to the next task early (safe to repeat)."""
+    def __init__(self, lock=None):
+        self.ok = lock is not None
+        self._lock = lock
+
+    def __bool__(self):
+        return self.ok
+
+    def release(self):
+        lock, self._lock = self._lock, None
+        if lock is not None:
+            lock.release()
+
+
 def _checkout_lock(account):
     with _ACCOUNT_GUARD:
         return _CHECKOUT_LOCKS.setdefault(account or "", threading.Lock())
@@ -862,8 +878,9 @@ def _checkout_refused(page):
         return False
 
 
-def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=False):
+def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=False, on_submitted=None):
     t0 = time.time()
+    submitted = False  # once Place Order is clicked, an error must never lead to a re-buy
     try:
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -964,8 +981,13 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
 
         existing = list(page.context.pages)
         checkout_url = page.url
+        _confirm_payment_sheet(page, log)  # a late PayNow sheet would block the click for 5s
+        # no_wait_after: return once the click lands instead of waiting for Lazada's next
+        # page. That wait timed out whenever the order page answered in >5s — after the
+        # order had gone through — and the fallback then stalled 30s and raised, which
+        # was reported as "retry": a second order. The outcome poll below does the waiting.
         try:
-            place.click(timeout=5000)
+            place.click(timeout=5000, no_wait_after=True)
         except Exception:
             # Something covers Place Order. If it's a payment sheet still waiting for
             # "Confirm Selection", confirm it and click for real — force-clicking
@@ -973,15 +995,24 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
             clicked = False
             if _confirm_payment_sheet(page, log, wait=1.0):
                 try:
-                    place.click(timeout=5000)
+                    place.click(timeout=5000, no_wait_after=True)
                     clicked = True
                 except Exception:
                     pass
             if not clicked:
-                h = place.element_handle()
-                if h:
-                    page.evaluate("(el) => el.click()", h)
+                try:
+                    h = place.element_handle(timeout=2000)
+                    if h:
+                        page.evaluate("(el) => el.click()", h)
+                except Exception:
+                    pass  # gone already — the page moved on; the outcome poll judges it
+        submitted = True
 
+        if on_submitted:  # the order is in — let the account's next checkout start now
+            try:
+                on_submitted()
+            except Exception:
+                pass
         maybe_pause(turbo, 0.6, 1.0)
         log(f"⏱ order submitted {time.time() - t0:.1f}s")
 
@@ -1116,8 +1147,17 @@ def complete_checkout(page, name, url, max_price, payment, dry_run, log, turbo=F
             pass
         return "stop"
     except Exception as e:
-        log(f"checkout error: {e}")
-        return "retry"
+        if not submitted:
+            log(f"checkout error: {e}")
+            return "retry"
+        # Place Order was already clicked: a retry could order twice. Stop, and ask
+        # the user to check instead.
+        log(f"checkout error after Place Order ({str(e).splitlines()[0][:120]}) — "
+            "NOT retrying; check your orders")
+        notifier.send_event("⚠️ Check your order", color=0xF1C40F, url=url,
+                            description=f"{name}: Place Order was clicked, then the page errored — "
+                                        "check Lazada's *To Pay* / *My Orders* before buying again.")
+        return "stop"
 
 
 def _left_checkout(target, checkout_url, followed):
@@ -1396,7 +1436,7 @@ class TaskWorker(threading.Thread):
         checkouts are paused, and one checkout at a time per account (two Buy Nows at
         once on the same account can knock each other's checkout over)."""
         if self._checkout_paused(account, url):
-            yield False
+            yield _Slot()
             return
         lock = _checkout_lock(account)
         if not lock.acquire(blocking=False):
@@ -1404,12 +1444,17 @@ class TaskWorker(threading.Thread):
             end = time.time() + 90
             while not lock.acquire(timeout=0.25):
                 if self._stop_event.is_set() or time.time() > end:
-                    yield False
+                    yield _Slot()
                     return
+        slot = _Slot(lock)
         try:
-            yield not self._checkout_paused(account, url)  # paused while we waited?
+            if self._checkout_paused(account, url):  # paused while we waited?
+                slot.release()
+                yield _Slot()
+            else:
+                yield slot
         finally:
-            lock.release()
+            slot.release()
 
     def _on_refused(self, account, session_file):
         """Lazada refused this account's order: pause checkouts for every task on it,
@@ -1433,8 +1478,8 @@ class TaskWorker(threading.Thread):
                  account, session_file, label=None):
         """Buy Now → checkout inside this account's checkout slot. Returns the checkout
         outcome, or None when nothing was bought (paused, waited too long, click failed)."""
-        with self._checkout_slot(account, url) as go:
-            if not go:
+        with self._checkout_slot(account, url) as slot:
+            if not slot:
                 return None
             self.status("IN STOCK — buying")
             notifier.send_event("🟢 In Stock — buying", description=label or self.task["name"], url=url,
@@ -1448,9 +1493,12 @@ class TaskWorker(threading.Thread):
                 return None
             maybe_pause(turbo, 0.8, 1.5)
             self.status("checking out")
+            # The slot is handed on the moment Place Order is clicked: confirming the
+            # outcome takes 8-20s on real PayNow orders, and a second drop on the same
+            # account shouldn't sit idle through that.
             outcome = complete_checkout(page, self.task["name"], url, max_price, payment,
-                                        dry_run, self.log, turbo)
-            if outcome == "refused":  # inside the slot, so a task waiting on it sees the pause
+                                        dry_run, self.log, turbo, on_submitted=slot.release)
+            if outcome == "refused":  # refused before Place Order, so still inside the slot
                 self._on_refused(account, session_file)
             return outcome
 

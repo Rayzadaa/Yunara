@@ -1,7 +1,7 @@
 {
-  "version": "2.9.26",
+  "version": "2.9.27",
   "url": "https://github.com/Rayzadaa/Yunara/releases/latest/download/Lazada-Bot-Share.zip",
-  "sha256": "b35ffdc4587b4cb1d9e3d64fc89ecadabb7a58b28039cf773f1a1f79f706544c",
-  "signature": "bb474e932ca0b181650e9bdc9ffc61ff7f1845a35f152bb3c76748472b511165d82019b9c59af4f55ef8649138762de06933575d3c334d812eb6433ccc77c70d",
-  "notes": "Login no longer dies on Lazada's anti-bot verification dialog: it's recognised everywhere, and the login alerts you, waits for the solve and carries on \u2014 instead of clicking into an invisible mask for 30s and failing with a cryptic error."
+  "sha256": "6a0dca26e75db1bf35870fab8e85da551d12a8c4a5c41cc3052f977ee38a35f1",
+  "signature": "4d97d06b1bf215f84fb0d8bf6a53906977175ca3f1f39e7bf8cacd4003ab17b85ec61af00554e5aef5183f3d675ad08d2e03c61bad0f5557bc0088157e039507",
+  "notes": "Faster checkout: Buy Now no longer waits for Discord (~0.7s, up to 10s), and a second drop on the same account starts as soon as the first order is placed. Also fixes a double-order risk when Lazada is slow right after Place Order."
 }
